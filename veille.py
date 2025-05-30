@@ -561,17 +561,23 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
         if len(evaluated_articles) > 0:
             st.subheader("💾 Téléchargement")
             
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             
-            # Préparation des données pour export
-            export_df = pd.DataFrame(evaluated_articles)
+            # Préparation des données pour export basée sur la sélection multiselect
+            if selected_indices:
+                selected_articles_data = [evaluated_articles[i] for i in selected_indices if i < len(evaluated_articles)]
+                export_df = pd.DataFrame(selected_articles_data)
+                st.success(f"📌 {len(selected_articles_data)} articles sélectionnés pour l'export")
+            else:
+                export_df = pd.DataFrame(evaluated_articles)
+                st.info("📌 Aucune sélection - tous les articles seront exportés")
             
             with col1:
                 csv_data = export_df.to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Télécharger CSV",
                     data=csv_data,
-                    file_name=f"veille_food_safety_{datetime.now().strftime('%Y%m%d')}.csv",
+                    file_name=f"veille_food_safety_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
@@ -599,10 +605,20 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
                 st.download_button(
                     label="📥 Télécharger Excel",
                     data=excel_buffer,
-                    file_name=f"veille_food_safety_{datetime.now().strftime('%Y%m%d')}.xlsx",
+                    file_name=f"veille_food_safety_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
+            
+            with col3:
+                # Statistiques de la sélection
+                if selected_indices:
+                    scores = [evaluated_articles[i]['Score'] for i in selected_indices if i < len(evaluated_articles)]
+                    if scores:
+                        avg_score = sum(scores) / len(scores)
+                        st.metric("Score Moyen Sélection", f"{avg_score:.1f}/100")
+                else:
+                    st.info("Aucune sélection active")
     
     else:
         st.warning(f"❌ Aucun article avec un score ≥ {min_pertinence_score} trouvé. Essayez de réduire le seuil de pertinence.")
