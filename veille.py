@@ -227,9 +227,7 @@ if st.button("Démarrer la Veille"):
             if pertinent_articles_data:
                 st.success(f"Trouvé {len(pertinent_articles_data)} articles pertinents.")
                 df = pd.DataFrame(pertinent_articles_data)
-                # Replace newlines with HTML line breaks for better display in Streamlit dataframe
-                df['Évaluation de la Pertinence'] = df['Évaluation de la Pertinence'].str.replace('\n', '<br>')
-                st.dataframe(df, use_container_width=True, unsafe_allow_html=True)
+                st.dataframe(df, use_container_width=True) # Removed unsafe_allow_html
 
                 # Download buttons
                 csv_data = df.to_csv(index=False).encode('utf-8')
