@@ -11,12 +11,15 @@ PRODUCT_TYPES = ["Produits laitiers", "Viande", "Produits frais", "Produits de b
 RISK_TYPES = ["Microbiologique", "Chimique", "Physique", "Allergène", "Fraude", "Autre"]
 MARKETS = ["UE", "US", "Canada", "Royaume-Uni", "France", "International", "Autre"]
 
-# Flux RSS (d'après l'exemple de l'utilisateur)
-RSS_FEEDS = {
+# Flux RSS (sources françaises et européennes)
+FRENCH_EU_RSS_FEEDS = {
     "CODEX Hygiene meeting": "https://www.fao.org/fao-who-codexalimentarius/meetings/detail/rss/fr/?meeting=CCFH&session=54",
+    "RASFF EU Feed": "https://webgate.ec.europa.eu/rasff-window/backend/public/consumer/rss/all/",
     "EFSA": "https://www.efsa.europa.eu/en/all/rss",
     "EU Food Safety": "https://food.ec.europa.eu/node/2/rss_en",
+    "French Recalls RAPPELCONSO": "https://rappel.conso.gouv.fr/rss?categorie=01",
     "Legifrance Alimentaire": "https://agriculture.gouv.fr/rss.xml",
+    "DGCCRF, French Fraud": "https://www.economie.gouv.fr/dgccrf/rss",
     "INRS secu": "https://www.inrs.fr/rss/?feed=actualites",
     "ANSES": "https://www.anses.fr/fr/flux-actualites.rss",
     "Health BE": "https://www.health.belgium.be/fr/rss/news.xml",
@@ -71,8 +74,8 @@ def evaluate_pertinence(article_title, article_summary, user_context, groq_api_k
 
     combined_context = f"Activité de l'utilisateur : {user_context}\nMots-clés de sécurité alimentaire : {', '.join(FOOD_SAFETY_KEYWORDS)}"
     prompt = f"""
-    Évaluez la pertinence de l'article suivant pour la sécurité alimentaire, en tenant compte de l'activité déclarée par l'utilisateur et des mots-clés généraux de sécurité alimentaire.
-    Mettez en évidence les impacts potentiels sur les opérations de l'utilisateur.
+    Évaluez la pertinence de l'article suivant pour la sécurité alimentaire, en tenant compte **spécifiquement** de l'activité déclarée par l'utilisateur (types de produits, types de risques, marchés, préoccupations principales) et des mots-clés généraux de sécurité alimentaire.
+    Mettez en évidence les impacts potentiels sur les opérations de l'utilisateur, en justifiant pourquoi l'article est pertinent ou non pour son domaine d'activité.
 
     Titre de l'article : {article_title}
     Résumé de l'article : {article_summary}
@@ -185,7 +188,7 @@ if st.button("Démarrer la Veille"):
     if start_date and end_date and start_date <= end_date:
         st.info("Récupération et évaluation des articles. Cela peut prendre un moment...")
         all_articles = []
-        for source_name, url in RSS_FEEDS.items():
+        for source_name, url in FRENCH_EU_RSS_FEEDS.items(): # Utiliser les flux filtrés
             entries = fetch_rss_feed(url)
             for entry in entries:
                 published_date = None
