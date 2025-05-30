@@ -263,8 +263,9 @@ if st.button("Démarrer la Veille"):
                     selection_mode="multi-row"
                 )
                 
-            # Display Moderately Pertinent Articles
-            if moderately_pertinent_articles_data:
+            # Option to display Moderately Pertinent Articles
+            display_moderately_pertinent = st.checkbox("Afficher les articles modérément pertinents")
+            if display_moderately_pertinent and moderately_pertinent_articles_data:
                 st.markdown("### Articles Modérément Pertinents")
                 df_moderately_pertinent = pd.DataFrame(moderately_pertinent_articles_data)
                 st.session_state['moderately_pertinent_selection'] = st.data_editor(
@@ -280,8 +281,11 @@ if st.button("Démarrer la Veille"):
                     num_rows="dynamic",
                     selection_mode="multi-row"
                 )
+            elif display_moderately_pertinent and not moderately_pertinent_articles_data:
+                st.info("Aucun article modérément pertinent trouvé pour les critères et la période spécifiés.")
 
-            if highly_pertinent_articles_data or moderately_pertinent_articles_data:
+
+            if highly_pertinent_articles_data or (display_moderately_pertinent and moderately_pertinent_articles_data):
                 st.markdown("---")
                 st.subheader("Télécharger les articles sélectionnés")
                 
@@ -290,7 +294,7 @@ if st.button("Démarrer la Veille"):
                     selected_indices = st.session_state['highly_pertinent_selection']['selection']['rows']
                     selected_rows_data.extend(df_highly_pertinent.iloc[selected_indices].to_dict(orient='records'))
                 
-                if 'moderately_pertinent_selection' in st.session_state and st.session_state['moderately_pertinent_selection']['selection']['rows']:
+                if display_moderately_pertinent and 'moderately_pertinent_selection' in st.session_state and st.session_state['moderately_pertinent_selection']['selection']['rows']:
                     selected_indices = st.session_state['moderately_pertinent_selection']['selection']['rows']
                     selected_rows_data.extend(df_moderately_pertinent.iloc[selected_indices].to_dict(orient='records'))
 
@@ -317,7 +321,7 @@ if st.button("Démarrer la Veille"):
                 else:
                     st.info("Sélectionnez des articles dans les tableaux ci-dessus pour les télécharger.")
 
-            else:
+            elif not highly_pertinent_articles_data and not (display_moderately_pertinent and moderately_pertinent_articles_data):
                 st.warning("Aucun article pertinent trouvé pour les critères et la période spécifiés.")
         else:
             st.warning("Aucun article trouvé dans la plage de dates spécifiée à partir des flux RSS.")
