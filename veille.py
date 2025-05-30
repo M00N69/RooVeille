@@ -94,6 +94,44 @@ def extract_content_from_entry(entry) -> str:
 class ArticleEvaluator:
     def __init__(self, groq_api_key: str):
         self.client = Groq(api_key=groq_api_key) if groq_api_key else None
+    
+    def translate_to_french(self, text: str, content_type: str = "texte") -> str:
+        """Traduit un texte en français en utilisant Groq."""
+        if not self.client or not text or len(text.strip()) < 3:
+            return text
+        
+        # Ne traduit que si le texte semble être en anglais (heuristique simple)
+        english_indicators = ['the', 'and', 'of', 'in', 'to', 'for', 'with', 'on', 'at', 'by']
+        text_lower = text.lower()
+        english_count = sum(1 for word in english_indicators if f' {word} ' in f' {text_lower} ')
+        
+        # Si moins de 2 indicateurs anglais, probablement déjà en français
+        if english_count < 2:
+            return text
+        
+        try:
+            prompt = f"""
+            Traduisez ce {content_type} de sécurité alimentaire en français de manière professionnelle et précise.
+            Gardez la terminologie technique appropriée pour les consultants en sécurité alimentaire.
+            
+            Texte à traduire : {text}
+            
+            Répondez UNIQUEMENT avec la traduction française, sans commentaire.
+            """
+            
+            response = self.client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="llama3-8b-8192",
+                temperature=0.1,
+                max_tokens=400,
+            )
+            
+            translated = response.choices[0].message.content.strip()
+            return translated if translated else text
+            
+        except Exception as e:
+            st.warning(f"Erreur de traduction pour {content_type}: {e}")
+            return text
         
     def evaluate_pertinence(self, article_title: str, article_summary: str, user_context: str) -> Tuple[str, str, int]:
         """Évalue la pertinence avec un score numérique pour un meilleur filtrage."""
@@ -338,6 +376,13 @@ with st.sidebar:
         help="Garde les paragraphes et listes lors du nettoyage HTML"
     )
     
+    # Option de traduction
+    st.session_state['translate_to_french'] = st.checkbox(
+        "🇫🇷 Traduire le contenu en français",
+        value=False,
+        help="Traduit automatiquement les titres et résumés en français (utilise l'API Groq)"
+    )
+    
     # Information sur l'extraction de contenu
     with st.expander("ℹ️ Extraction de contenu"):
         st.markdown("""
@@ -347,6 +392,8 @@ with st.sidebar:
         3. `title` (fallback minimal)
         
         **Health BE** : Utilise `content:encoded` avec HTML riche
+        
+        **🇫🇷 Traduction** : Les articles EFSA/EU (en anglais) peuvent être traduits automatiquement
         """)
     
     clean_html = st.session_state.get('clean_html', True)
@@ -425,21 +472,39 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
     # Limitation du nombre d'articles à évaluer
     all_articles = all_articles[:max_articles]
     
+    # Message informatif sur la traduction
+    translate_to_french = st.session_state.get('translate_to_french', False)
+    if translate_to_french:
+        st.info(f"🇫🇷 **Mode traduction activé** : Les titres et résumés seront traduits en français automatiquement")
+    
     st.info(f"🔍 Évaluation de {len(all_articles)} articles...")
     
-    # Évaluation des articles
+    # Évaluation des articles avec traduction optionnelle
     evaluator = ArticleEvaluator(groq_api_key)
     evaluated_articles = []
     
     progress_bar = st.progress(0)
     progress_text = st.empty()
     
+    # Option de traduction
+    translate_to_french = st.session_state.get('translate_to_french', False)
+    
     for idx, article in enumerate(all_articles):
         progress_text.text(f"Évaluation {idx+1}/{len(all_articles)}: {article['source']}")
         
+        # Traduction optionnelle AVANT évaluation
+        current_title = article['title']
+        current_summary = article['summary']
+        
+        if translate_to_french:
+            with st.spinner(f"Traduction de l'article {idx+1}..."):
+                current_title = evaluator.translate_to_french(article['title'], "titre")
+                current_summary = evaluator.translate_to_french(article['summary'], "résumé")
+        
+        # Évaluation avec le contenu (possiblement traduit)
         pertinence_level, evaluation_summary, score = evaluator.evaluate_pertinence(
-            article['title'],
-            article['summary'],
+            current_title,
+            current_summary,
             user_context
         )
         
@@ -447,14 +512,17 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
         if score >= min_pertinence_score:
             evaluated_articles.append({
                 "Source": article['source'],
-                "Titre": article['title'],
-                "Résumé": article['summary'],
+                "Titre": current_title,  # Titre possiblement traduit
+                "Résumé": current_summary,  # Résumé possiblement traduit
+                "Titre Original": article['title'],  # Garde l'original pour référence
+                "Résumé Original": article['summary'],  # Garde l'original pour référence
                 "Lien": article['link'],
                 "Date de Publication": article['published'].strftime('%Y-%m-%d'),
                 "Niveau de Pertinence": pertinence_level,
                 "Score": score,
                 "Évaluation de la Pertinence": evaluation_summary,
-                "raw_content": article.get('raw_content', '')  # Garde le contenu brut pour debug
+                "raw_content": article.get('raw_content', ''),
+                "Traduit": translate_to_french
             })
         
         progress_bar.progress((idx + 1) / len(all_articles))
@@ -496,9 +564,14 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
             score_visual = f"⭐ {article['Score']}/100 " + ("🟢" if article['Score'] >= 80 else "🟡" if article['Score'] >= 60 else "🟠")
             lien_status = "🔗 Disponible" if article['Lien'] != '#' else "❌ Indisponible"
             
+            # Indicateur de traduction
+            title_display = article['Titre'][:80] + ("..." if len(article['Titre']) > 80 else "")
+            if article.get('Traduit', False):
+                title_display = f"🇫🇷 {title_display}"
+            
             simple_data.append({
                 'Source': article['Source'],
-                'Titre': article['Titre'][:80] + ("..." if len(article['Titre']) > 80 else ""),
+                'Titre': title_display,
                 'Score': score_visual,
                 'Date': article['Date de Publication'],
                 'Lien': lien_status
@@ -513,7 +586,9 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
         
         options_for_export = []
         for idx, article in enumerate(evaluated_articles):
-            label = f"⭐{article['Score']} - {article['Source']} - {article['Titre'][:50]}..."
+            # Ajoute un indicateur de traduction dans le label
+            translation_indicator = " 🇫🇷" if article.get('Traduit', False) else ""
+            label = f"⭐{article['Score']} - {article['Source']} - {article['Titre'][:50]}...{translation_indicator}"
             options_for_export.append((idx, label))
         
         selected_indices = st.multiselect(
@@ -535,9 +610,24 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
                         col1, col2 = st.columns([3, 1])
                         
                         with col1:
-                            st.markdown(f"**📰 Titre :** {article['Titre']}")
-                            st.markdown(f"**📝 Résumé :**")
-                            st.write(article['Résumé'])
+                            # Affichage du titre avec indicateur de traduction
+                            if article.get('Traduit', False):
+                                st.markdown(f"**📰 Titre (🇫🇷 traduit) :** {article['Titre']}")
+                                with st.expander("👁️ Voir le titre original"):
+                                    st.markdown(f"**🔤 Original :** {article.get('Titre Original', 'N/A')}")
+                            else:
+                                st.markdown(f"**📰 Titre :** {article['Titre']}")
+                            
+                            # Affichage du résumé avec indicateur de traduction
+                            if article.get('Traduit', False):
+                                st.markdown(f"**📝 Résumé (🇫🇷 traduit) :**")
+                                st.write(article['Résumé'])
+                                with st.expander("👁️ Voir le résumé original"):
+                                    st.write(article.get('Résumé Original', 'N/A'))
+                            else:
+                                st.markdown(f"**📝 Résumé :**")
+                                st.write(article['Résumé'])
+                            
                             st.markdown(f"**🔍 Évaluation :**")
                             st.write(article['Évaluation de la Pertinence'])
                         
@@ -582,13 +672,56 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
             
             col1, col2, col3 = st.columns(3)
             
-            # Préparation données export
+            # Préparation données export (nettoie les colonnes techniques)
             if selected_indices:
                 selected_articles_data = [evaluated_articles[i] for i in selected_indices if i < len(evaluated_articles)]
-                export_df = pd.DataFrame(selected_articles_data)
+                # Nettoyage pour export
+                clean_articles = []
+                for article in selected_articles_data:
+                    clean_article = {
+                        'Source': article['Source'],
+                        'Titre': article['Titre'],
+                        'Résumé': article['Résumé'],
+                        'Lien': article['Lien'],
+                        'Date de Publication': article['Date de Publication'],
+                        'Niveau de Pertinence': article['Niveau de Pertinence'],
+                        'Score': article['Score'],
+                        'Évaluation de la Pertinence': article['Évaluation de la Pertinence']
+                    }
+                    # Ajoute les versions originales si traduit
+                    if article.get('Traduit', False):
+                        clean_article['Titre Original'] = article.get('Titre Original', '')
+                        clean_article['Résumé Original'] = article.get('Résumé Original', '')
+                        clean_article['Traduit'] = 'Oui'
+                    else:
+                        clean_article['Traduit'] = 'Non'
+                    clean_articles.append(clean_article)
+                
+                export_df = pd.DataFrame(clean_articles)
                 st.success(f"📌 {len(selected_articles_data)} articles sélectionnés pour l'export")
             else:
-                export_df = pd.DataFrame(evaluated_articles)
+                # Même nettoyage pour tous les articles
+                clean_articles = []
+                for article in evaluated_articles:
+                    clean_article = {
+                        'Source': article['Source'],
+                        'Titre': article['Titre'],
+                        'Résumé': article['Résumé'],
+                        'Lien': article['Lien'],
+                        'Date de Publication': article['Date de Publication'],
+                        'Niveau de Pertinence': article['Niveau de Pertinence'],
+                        'Score': article['Score'],
+                        'Évaluation de la Pertinence': article['Évaluation de la Pertinence']
+                    }
+                    if article.get('Traduit', False):
+                        clean_article['Titre Original'] = article.get('Titre Original', '')
+                        clean_article['Résumé Original'] = article.get('Résumé Original', '')
+                        clean_article['Traduit'] = 'Oui'
+                    else:
+                        clean_article['Traduit'] = 'Non'
+                    clean_articles.append(clean_article)
+                
+                export_df = pd.DataFrame(clean_articles)
                 st.info("📌 Aucune sélection - tous les articles seront exportés")
             
             with col1:
