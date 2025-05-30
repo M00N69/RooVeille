@@ -231,19 +231,25 @@ if st.button("Démarrer la Veille"):
                         groq_api_key
                     )
                     
-                    article_data = {
-                        "Source": article['source'],
-                        "Titre": article['title'],
-                        "Résumé": article['summary'],
-                        "Lien": article['link'],
-                        "Date de Publication": article['published'].strftime('%Y-%m-%d'),
-                        "Évaluation de la Pertinence": evaluation_summary
-                    }
-
+                    # Only add articles that are "Très pertinent" or "Modérément pertinent"
                     if pertinence_level == "Très pertinent":
-                        highly_pertinent_articles_data.append(article_data)
+                        highly_pertinent_articles_data.append({
+                            "Source": article['source'],
+                            "Titre": article['title'],
+                            "Résumé": article['summary'],
+                            "Lien": article['link'],
+                            "Date de Publication": article['published'].strftime('%Y-%m-%d'),
+                            "Évaluation de la Pertinence": evaluation_summary
+                        })
                     elif pertinence_level == "Modérément pertinent":
-                        moderately_pertinent_articles_data.append(article_data)
+                        moderately_pertinent_articles_data.append({
+                            "Source": article['source'],
+                            "Titre": article['title'],
+                            "Résumé": article['summary'],
+                            "Lien": article['link'],
+                            "Date de Publication": article['published'].strftime('%Y-%m-%d'),
+                            "Évaluation de la Pertinence": evaluation_summary
+                        })
             
             # Display Highly Pertinent Articles
             if highly_pertinent_articles_data:
