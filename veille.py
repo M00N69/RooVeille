@@ -4,7 +4,8 @@ import requests
 from datetime import datetime, timedelta
 import os
 from groq import Groq
-import pandas as pd # Import pandas for table and download functionality
+import pandas as pd
+from io import BytesIO
 
 # --- Configuration ---
 # Catégories prédéfinies pour la saisie de l'utilisateur
@@ -66,28 +67,41 @@ def get_groq_response(prompt, api_key):
         return None
 
 def evaluate_pertinence(article_title, article_summary, user_context, groq_api_key):
-    """Évalue la pertinence d'un article à l'aide de l'API Groq."""
+    """Évalue la pertinence d'un article à l'aide de l'API Groq et classe son niveau."""
     if not groq_api_key:
         st.warning("Clé API Groq introuvable. L'évaluation de la pertinence sera ignorée.")
-        return True, "N/A (Clé API manquante)"
+        return "Non pertinent", "N/A (Clé API manquante)"
 
     combined_context = f"Activité de l'utilisateur : {user_context}\nMots-clés de sécurité alimentaire : {', '.join(FOOD_SAFETY_KEYWORDS)}"
     prompt = f"""
     Évaluez la pertinence de l'article suivant pour la sécurité alimentaire, en tenant compte **spécifiquement** de l'activité déclarée par l'utilisateur (types de produits, types de risques, marchés, préoccupations principales) et des mots-clés généraux de sécurité alimentaire.
-    Fournissez uniquement un bref résumé de la pertinence et de l'impact potentiel sur les opérations de l'utilisateur, sans poser de question ni inclure de préambule comme "Évaluation de la pertinence de l'article :".
+
+    Classez la pertinence comme "Très pertinent", "Modérément pertinent" ou "Non pertinent".
+    Fournissez ensuite un bref résumé de la pertinence et de l'impact potentiel sur les opérations de l'utilisateur.
+
+    Format de la réponse :
+    Pertinence: [Très pertinent/Modérément pertinent/Non pertinent]
+    Résumé: [Bref résumé de la pertinence et de l'impact potentiel]
 
     Titre de l'article : {article_title}
     Résumé de l'article : {article_summary}
 
     Contexte d'évaluation : {combined_context}
-
-    Résumé de la pertinence et de l'impact potentiel :
     """
     response = get_groq_response(prompt, groq_api_key)
     if response:
-        # The Groq API is instructed to return only the summary, so we take it directly.
-        return True, response.strip()
-    return False, "Impossible d'évaluer la pertinence."
+        pertinence_level = "Non pertinent"
+        summary = "Impossible d'évaluer la pertinence."
+        
+        lines = response.split('\n')
+        for line in lines:
+            if line.startswith("Pertinence:"):
+                pertinence_level = line.replace("Pertinence:", "").strip()
+            elif line.startswith("Résumé:"):
+                summary = line.replace("Résumé:", "").strip()
+        
+        return pertinence_level, summary
+    return "Non pertinent", "Impossible d'évaluer la pertinence."
 
 # --- Streamlit UI ---
 
@@ -205,50 +219,103 @@ if st.button("Démarrer la Veille"):
 
         st.subheader("Résultats de l'Évaluation")
         if all_articles:
-            pertinent_articles_data = []
+            highly_pertinent_articles_data = []
+            moderately_pertinent_articles_data = []
+            
             for i, article in enumerate(all_articles):
                 with st.spinner(f"Évaluation de l'article {i+1}/{len(all_articles)} de {article['source']}..."):
-                    is_pertinent, evaluation_summary = evaluate_pertinence(
+                    pertinence_level, evaluation_summary = evaluate_pertinence(
                         article['title'],
                         article['summary'],
                         user_context_string,
                         groq_api_key
                     )
-                    if is_pertinent:
-                        pertinent_articles_data.append({
-                            "Source": article['source'],
-                            "Titre": article['title'],
-                            "Résumé": article['summary'],
-                            "Lien": article['link'],
-                            "Date de Publication": article['published'].strftime('%Y-%m-%d'),
-                            "Évaluation de la Pertinence": evaluation_summary
-                        })
+                    
+                    article_data = {
+                        "Source": article['source'],
+                        "Titre": article['title'],
+                        "Résumé": article['summary'],
+                        "Lien": article['link'],
+                        "Date de Publication": article['published'].strftime('%Y-%m-%d'),
+                        "Évaluation de la Pertinence": evaluation_summary
+                    }
+
+                    if pertinence_level == "Très pertinent":
+                        highly_pertinent_articles_data.append(article_data)
+                    elif pertinence_level == "Modérément pertinent":
+                        moderately_pertinent_articles_data.append(article_data)
             
-            if pertinent_articles_data:
-                st.success(f"Trouvé {len(pertinent_articles_data)} articles pertinents.")
-                df = pd.DataFrame(pertinent_articles_data)
-                st.dataframe(df, use_container_width=True) # Removed unsafe_allow_html
-
-                # Download buttons
-                csv_data = df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="Télécharger les résultats en CSV",
-                    data=csv_data,
-                    file_name="veille_reglementaire.csv",
-                    mime="text/csv",
+            # Display Highly Pertinent Articles
+            if highly_pertinent_articles_data:
+                st.markdown("### Articles Très Pertinents")
+                df_highly_pertinent = pd.DataFrame(highly_pertinent_articles_data)
+                st.session_state['highly_pertinent_selection'] = st.data_editor(
+                    df_highly_pertinent,
+                    key="highly_pertinent_editor",
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Lien": st.column_config.LinkColumn("Lien", display_text="Ouvrir l'article"),
+                        "Résumé": st.column_config.Column("Résumé", width="large"),
+                        "Évaluation de la Pertinence": st.column_config.Column("Évaluation de la Pertinence", width="large"),
+                    },
+                    num_rows="dynamic",
+                    selection_mode="multi-row"
+                )
+                
+            # Display Moderately Pertinent Articles
+            if moderately_pertinent_articles_data:
+                st.markdown("### Articles Modérément Pertinents")
+                df_moderately_pertinent = pd.DataFrame(moderately_pertinent_articles_data)
+                st.session_state['moderately_pertinent_selection'] = st.data_editor(
+                    df_moderately_pertinent,
+                    key="moderately_pertinent_editor",
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Lien": st.column_config.LinkColumn("Lien", display_text="Ouvrir l'article"),
+                        "Résumé": st.column_config.Column("Résumé", width="large"),
+                        "Évaluation de la Pertinence": st.column_config.Column("Évaluation de la Pertinence", width="large"),
+                    },
+                    num_rows="dynamic",
+                    selection_mode="multi-row"
                 )
 
-                # For Excel, we need BytesIO
-                from io import BytesIO
-                excel_buffer = BytesIO()
-                df.to_excel(excel_buffer, index=False, engine='xlsxwriter')
-                excel_buffer.seek(0)
-                st.download_button(
-                    label="Télécharger les résultats en Excel",
-                    data=excel_buffer,
-                    file_name="veille_reglementaire.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
+            if highly_pertinent_articles_data or moderately_pertinent_articles_data:
+                st.markdown("---")
+                st.subheader("Télécharger les articles sélectionnés")
+                
+                selected_rows_data = []
+                if 'highly_pertinent_selection' in st.session_state and st.session_state['highly_pertinent_selection']['selection']['rows']:
+                    selected_indices = st.session_state['highly_pertinent_selection']['selection']['rows']
+                    selected_rows_data.extend(df_highly_pertinent.iloc[selected_indices].to_dict(orient='records'))
+                
+                if 'moderately_pertinent_selection' in st.session_state and st.session_state['moderately_pertinent_selection']['selection']['rows']:
+                    selected_indices = st.session_state['moderately_pertinent_selection']['selection']['rows']
+                    selected_rows_data.extend(df_moderately_pertinent.iloc[selected_indices].to_dict(orient='records'))
+
+                if selected_rows_data:
+                    df_selected = pd.DataFrame(selected_rows_data)
+                    
+                    csv_data = df_selected.to_csv(index=False).encode('utf-8')
+                    st.download_button(
+                        label="Télécharger la sélection en CSV",
+                        data=csv_data,
+                        file_name="veille_reglementaire_selection.csv",
+                        mime="text/csv",
+                    )
+
+                    excel_buffer = BytesIO()
+                    df_selected.to_excel(excel_buffer, index=False, engine='xlsxwriter')
+                    excel_buffer.seek(0)
+                    st.download_button(
+                        label="Télécharger la sélection en Excel",
+                        data=excel_buffer,
+                        file_name="veille_reglementaire_selection.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                else:
+                    st.info("Sélectionnez des articles dans les tableaux ci-dessus pour les télécharger.")
 
             else:
                 st.warning("Aucun article pertinent trouvé pour les critères et la période spécifiés.")
