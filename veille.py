@@ -19,7 +19,6 @@ MARKETS = ["UE", "US", "Canada", "Royaume-Uni", "France", "International", "Autr
 
 # Flux RSS optimisés avec gestion spéciale pour Health BE
 FRENCH_EU_RSS_FEEDS = {
-    "RASFF EU Feed": "https://webgate.ec.europa.eu/rasff-window/backend/public/consumer/rss/all/",
     "EFSA": "https://www.efsa.europa.eu/en/all/rss",
     "EU Food Safety": "https://food.ec.europa.eu/node/2/rss_en",
     "ANSES": "https://www.anses.fr/fr/flux-actualites.rss",
