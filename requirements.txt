@@ -2,3 +2,5 @@ streamlit
 feedparser
 requests
 groq
+pandas
+xlsxwriter
