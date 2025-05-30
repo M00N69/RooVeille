@@ -4,6 +4,7 @@ import requests
 from datetime import datetime, timedelta
 import os
 from groq import Groq
+import pandas as pd # Import pandas for table and download functionality
 
 # --- Configuration ---
 # Catégories prédéfinies pour la saisie de l'utilisateur
@@ -17,7 +18,6 @@ FRENCH_EU_RSS_FEEDS = {
     "RASFF EU Feed": "https://webgate.ec.europa.eu/rasff-window/backend/public/consumer/rss/all/",
     "EFSA": "https://www.efsa.europa.eu/en/all/rss",
     "EU Food Safety": "https://food.ec.europa.eu/node/2/rss_en",
-    "French Recalls RAPPELCONSO": "https://rappel.conso.gouv.fr/rss?categorie=01",
     "Legifrance Alimentaire": "https://agriculture.gouv.fr/rss.xml",
     "DGCCRF, French Fraud": "https://www.economie.gouv.fr/dgccrf/rss",
     "INRS secu": "https://www.inrs.fr/rss/?feed=actualites",
@@ -75,24 +75,22 @@ def evaluate_pertinence(article_title, article_summary, user_context, groq_api_k
     combined_context = f"Activité de l'utilisateur : {user_context}\nMots-clés de sécurité alimentaire : {', '.join(FOOD_SAFETY_KEYWORDS)}"
     prompt = f"""
     Évaluez la pertinence de l'article suivant pour la sécurité alimentaire, en tenant compte **spécifiquement** de l'activité déclarée par l'utilisateur (types de produits, types de risques, marchés, préoccupations principales) et des mots-clés généraux de sécurité alimentaire.
-    Mettez en évidence les impacts potentiels sur les opérations de l'utilisateur, en justifiant pourquoi l'article est pertinent ou non pour son domaine d'activité.
+    Fournissez uniquement un bref résumé de la pertinence et de l'impact potentiel sur les opérations de l'utilisateur, sans poser de question ni inclure de préambule comme "Évaluation de la pertinence de l'article :".
 
     Titre de l'article : {article_title}
     Résumé de l'article : {article_summary}
 
     Contexte d'évaluation : {combined_context}
 
-    Cet article est-il pertinent ? (Oui/Non)
-    Bref résumé de la pertinence et de l'impact potentiel :
+    Résumé de la pertinence et de l'impact potentiel :
     """
     response = get_groq_response(prompt, groq_api_key)
     if response:
-        is_pertinent = "oui" in response.lower()
-        summary = response.replace("Cet article est-il pertinent ? (Oui/Non)", "").strip()
-        return is_pertinent, summary
+        # The Groq API is instructed to return only the summary, so we take it directly.
+        return True, response.strip()
     return False, "Impossible d'évaluer la pertinence."
 
-# --- Interface utilisateur Streamlit ---
+# --- Streamlit UI ---
 
 st.set_page_config(page_title="Veille Réglementaire et Études sur la Sécurité Alimentaire", layout="wide")
 
@@ -208,7 +206,7 @@ if st.button("Démarrer la Veille"):
 
         st.subheader("Résultats de l'Évaluation")
         if all_articles:
-            pertinent_articles = []
+            pertinent_articles_data = []
             for i, article in enumerate(all_articles):
                 with st.spinner(f"Évaluation de l'article {i+1}/{len(all_articles)} de {article['source']}..."):
                     is_pertinent, evaluation_summary = evaluate_pertinence(
@@ -218,23 +216,41 @@ if st.button("Démarrer la Veille"):
                         groq_api_key
                     )
                     if is_pertinent:
-                        pertinent_articles.append({
-                            "source": article['source'],
-                            "title": article['title'],
-                            "summary": article['summary'],
-                            "link": article['link'],
-                            "published": article['published'],
-                            "evaluation": evaluation_summary
+                        pertinent_articles_data.append({
+                            "Source": article['source'],
+                            "Titre": article['title'],
+                            "Résumé": article['summary'],
+                            "Lien": article['link'],
+                            "Date de Publication": article['published'].strftime('%Y-%m-%d'),
+                            "Évaluation de la Pertinence": evaluation_summary
                         })
             
-            if pertinent_articles:
-                st.success(f"Trouvé {len(pertinent_articles)} articles pertinents.")
-                for article in pertinent_articles:
-                    st.markdown(f"### [{article['title']}]({article['link']})")
-                    st.markdown(f"**Source :** {article['source']} | **Publié le :** {article['published'].strftime('%Y-%m-%d')}")
-                    st.write(f"**Résumé :** {article['summary']}")
-                    st.info(f"**Évaluation de la Pertinence :** {article['evaluation']}")
-                    st.markdown("---")
+            if pertinent_articles_data:
+                st.success(f"Trouvé {len(pertinent_articles_data)} articles pertinents.")
+                df = pd.DataFrame(pertinent_articles_data)
+                st.dataframe(df, use_container_width=True)
+
+                # Download buttons
+                csv_data = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Télécharger les résultats en CSV",
+                    data=csv_data,
+                    file_name="veille_reglementaire.csv",
+                    mime="text/csv",
+                )
+
+                # For Excel, we need BytesIO
+                from io import BytesIO
+                excel_buffer = BytesIO()
+                df.to_excel(excel_buffer, index=False, engine='xlsxwriter')
+                excel_buffer.seek(0)
+                st.download_button(
+                    label="Télécharger les résultats en Excel",
+                    data=excel_buffer,
+                    file_name="veille_reglementaire.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
             else:
                 st.warning("Aucun article pertinent trouvé pour les critères et la période spécifiés.")
         else:
