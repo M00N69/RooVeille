@@ -291,58 +291,6 @@ def fetch_all_articles(feeds: Dict[str, str], start_date: datetime.date, end_dat
     st.success(f"✅ {len(all_articles)} articles récupérés au total")
     return all_articles
 
-def create_enhanced_dataframe(articles_data: List[Dict]) -> pd.DataFrame:
-    """Crée un DataFrame optimisé pour l'affichage avec retours à la ligne."""
-    if not articles_data:
-        return pd.DataFrame(columns=['Source', 'Titre', 'Résumé', 'Score', 'Date', 'Évaluation', 'Lien'])
-    
-    # Nettoyage et formatage sécurisé des données
-    display_data = []
-    for article in articles_data:
-        try:
-            # Nettoyage et validation de chaque champ
-            source = str(article.get('Source', 'N/A')).strip()
-            titre = str(article.get('Titre', 'N/A')).strip()
-            resume = str(article.get('Résumé', 'N/A')).strip()
-            score = article.get('Score', 0)
-            date = str(article.get('Date de Publication', 'N/A')).strip()
-            evaluation = str(article.get('Évaluation de la Pertinence', 'N/A')).strip()
-            lien = str(article.get('Lien', 'N/A')).strip()
-            
-            # Validation du score
-            try:
-                score = int(float(score)) if score is not None else 0
-                score = max(0, min(100, score))  # Clamp entre 0 et 100
-            except (ValueError, TypeError):
-                score = 0
-            
-            # Troncature des textes longs
-            if len(titre) > 100:
-                titre = titre[:97] + "..."
-            if len(resume) > 200:
-                resume = resume[:197] + "..."
-            if len(evaluation) > 150:
-                evaluation = evaluation[:147] + "..."
-            
-            display_data.append({
-                'Source': source,
-                'Titre': titre,
-                'Résumé': resume,
-                'Score': score,
-                'Date': date,
-                'Évaluation': evaluation,
-                'Lien': lien
-            })
-            
-        except Exception as e:
-            st.warning(f"Erreur lors du formatage d'un article : {e}")
-            continue
-    
-    if not display_data:
-        return pd.DataFrame(columns=['Source', 'Titre', 'Résumé', 'Score', 'Date', 'Évaluation', 'Lien'])
-    
-    return pd.DataFrame(display_data)
-
 # --- Interface Streamlit optimisée ---
 
 st.set_page_config(
@@ -536,34 +484,105 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
         with col4:
             st.metric("Score Max", f"{max(score_stats)}/100")
         
-        # Tableau interactif amélioré
+        # AFFICHAGE SIMPLE - AUCUN data_editor !
         st.subheader("📊 Articles Sélectionnés")
         
-        df_display = create_enhanced_dataframe(evaluated_articles)
+        # 1. Vue d'ensemble avec tableau simple
+        st.markdown("### 📋 Vue d'ensemble")
         
-        selected_articles = st.data_editor(
-            df_display,
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "Lien": st.column_config.LinkColumn("🔗 Lien", display_text="Ouvrir"),
-                "Titre": st.column_config.TextColumn("📰 Titre", width="large"),
-                "Résumé": st.column_config.TextColumn("📝 Résumé", width="large"),
-                "Score": st.column_config.TextColumn("⭐ Score", width="small"),
-                "Évaluation": st.column_config.TextColumn("🔍 Évaluation", width="large"),
-                "Source": st.column_config.TextColumn("📡 Source", width="medium"),
-                "Date": st.column_config.DateColumn("📅 Date", width="small")
-            },
-            key="articles_selection"
+        # Préparation simple des données
+        simple_data = []
+        for article in evaluated_articles:
+            score_visual = f"⭐ {article['Score']}/100 " + ("🟢" if article['Score'] >= 80 else "🟡" if article['Score'] >= 60 else "🟠")
+            lien_status = "🔗 Disponible" if article['Lien'] != '#' else "❌ Indisponible"
+            
+            simple_data.append({
+                'Source': article['Source'],
+                'Titre': article['Titre'][:80] + ("..." if len(article['Titre']) > 80 else ""),
+                'Score': score_visual,
+                'Date': article['Date de Publication'],
+                'Lien': lien_status
+            })
+        
+        # Affichage tableau simple
+        simple_df = pd.DataFrame(simple_data)
+        st.dataframe(simple_df, use_container_width=True)
+        
+        # 2. Sélection pour export
+        st.markdown("### 📥 Sélection pour Export")
+        
+        options_for_export = []
+        for idx, article in enumerate(evaluated_articles):
+            label = f"⭐{article['Score']} - {article['Source']} - {article['Titre'][:50]}..."
+            options_for_export.append((idx, label))
+        
+        selected_indices = st.multiselect(
+            "Sélectionnez les articles à exporter :",
+            options=[opt[0] for opt in options_for_export],
+            format_func=lambda x: next(opt[1] for opt in options_for_export if opt[0] == x),
+            default=list(range(min(5, len(options_for_export))))
         )
         
-        # Téléchargement des résultats
+        # 3. Affichage détaillé
+        if selected_indices:
+            st.markdown(f"### 📖 Détails des {len(selected_indices)} articles sélectionnés")
+            
+            for idx in selected_indices:
+                if idx < len(evaluated_articles):
+                    article = evaluated_articles[idx]
+                    
+                    with st.expander(f"⭐ {article['Score']}/100 - {article['Source']} - {article['Titre'][:60]}..."):
+                        col1, col2 = st.columns([3, 1])
+                        
+                        with col1:
+                            st.markdown(f"**📰 Titre :** {article['Titre']}")
+                            st.markdown(f"**📝 Résumé :**")
+                            st.write(article['Résumé'])
+                            st.markdown(f"**🔍 Évaluation :**")
+                            st.write(article['Évaluation de la Pertinence'])
+                        
+                        with col2:
+                            st.markdown(f"**📡 Source :** {article['Source']}")
+                            st.markdown(f"**⭐ Score :** {article['Score']}/100")
+                            st.markdown(f"**📅 Date :** {article['Date de Publication']}")
+                            
+                            if article['Lien'] != '#':
+                                st.markdown(f"**[🔗 Ouvrir l'article]({article['Lien']})**")
+                            else:
+                                st.markdown("**❌ Lien indisponible**")
+        else:
+            st.info("Sélectionnez des articles ci-dessus pour voir les détails")
+        
+        # 4. Debug
+        if st.sidebar.checkbox("🔬 Mode Debug - Afficher contenu brut"):
+            st.markdown("### 🔬 Comparaison Contenu Nettoyé vs Brut")
+            
+            debug_article_idx = st.selectbox(
+                "Sélectionnez un article pour le debug :",
+                range(len(evaluated_articles)),
+                format_func=lambda x: f"{evaluated_articles[x]['Source']} - {evaluated_articles[x]['Titre'][:50]}..."
+            )
+            
+            if debug_article_idx < len(evaluated_articles):
+                article = evaluated_articles[debug_article_idx]
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**📝 Contenu Nettoyé:**")
+                    st.text_area("", article['Résumé'], height=200, key="clean_content_debug")
+                
+                with col2:
+                    st.markdown("**🔧 Contenu Brut (HTML):**")
+                    raw_content = article.get('raw_content', 'Non disponible')
+                    st.text_area("", raw_content, height=200, key="raw_content_debug")
+        
+        # Téléchargement
         if len(evaluated_articles) > 0:
             st.subheader("💾 Téléchargement")
             
             col1, col2, col3 = st.columns(3)
             
-            # Préparation des données pour export basée sur la sélection multiselect
+            # Préparation données export
             if selected_indices:
                 selected_articles_data = [evaluated_articles[i] for i in selected_indices if i < len(evaluated_articles)]
                 export_df = pd.DataFrame(selected_articles_data)
@@ -586,20 +605,6 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
                 excel_buffer = BytesIO()
                 with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
                     export_df.to_excel(writer, sheet_name='Veille Food Safety', index=False)
-                    
-                    # Formatage Excel
-                    workbook = writer.book
-                    worksheet = writer.sheets['Veille Food Safety']
-                    
-                    # Format des colonnes
-                    worksheet.set_column('A:A', 15)  # Source
-                    worksheet.set_column('B:B', 50)  # Titre  
-                    worksheet.set_column('C:C', 60)  # Résumé
-                    worksheet.set_column('D:D', 40)  # Lien
-                    worksheet.set_column('E:E', 12)  # Date
-                    worksheet.set_column('F:F', 20)  # Niveau
-                    worksheet.set_column('G:G', 8)   # Score
-                    worksheet.set_column('H:H', 80)  # Évaluation
                 
                 excel_buffer.seek(0)
                 st.download_button(
@@ -611,7 +616,6 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
                 )
             
             with col3:
-                # Statistiques de la sélection
                 if selected_indices:
                     scores = [evaluated_articles[i]['Score'] for i in selected_indices if i < len(evaluated_articles)]
                     if scores:
