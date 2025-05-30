@@ -100,34 +100,43 @@ class ArticleEvaluator:
         if not self.client or not text or len(text.strip()) < 3:
             return text
         
-        # Ne traduit que si le texte semble être en anglais (heuristique simple)
-        english_indicators = ['the', 'and', 'of', 'in', 'to', 'for', 'with', 'on', 'at', 'by']
+        # Détection plus robuste de l'anglais
+        english_words = ['the', 'and', 'of', 'in', 'to', 'for', 'with', 'on', 'at', 'by', 'from', 'as', 'is', 'are', 'was', 'were', 'been', 'have', 'has', 'had', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'must']
         text_lower = text.lower()
-        english_count = sum(1 for word in english_indicators if f' {word} ' in f' {text_lower} ')
         
-        # Si moins de 2 indicateurs anglais, probablement déjà en français
-        if english_count < 2:
+        # Compte les mots anglais
+        word_count = len(text.split())
+        english_count = sum(1 for word in english_words if f' {word} ' in f' {text_lower} ' or text_lower.startswith(f'{word} ') or text_lower.endswith(f' {word}'))
+        
+        # Si moins de 20% de mots anglais détectés, probablement déjà en français
+        if word_count > 0 and (english_count / word_count) < 0.2:
             return text
         
         try:
             prompt = f"""
-            Traduisez ce {content_type} de sécurité alimentaire en français de manière professionnelle et précise.
-            Gardez la terminologie technique appropriée pour les consultants en sécurité alimentaire.
+            Traduisez ce {content_type} scientifique en français professionnel.
+            Gardez tous les termes techniques, noms d'espèces, codes de référence, et acronymes en version originale.
             
-            Texte à traduire : {text}
+            IMPORTANT : Répondez UNIQUEMENT avec la traduction française, rien d'autre.
             
-            Répondez UNIQUEMENT avec la traduction française, sans commentaire.
+            Texte à traduire :
+            {text}
             """
             
             response = self.client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="llama3-8b-8192",
-                temperature=0.1,
-                max_tokens=400,
+                temperature=0.0,  # Plus déterministe
+                max_tokens=500,
             )
             
             translated = response.choices[0].message.content.strip()
-            return translated if translated else text
+            
+            # Vérifie que la traduction n'est pas vide et différente de l'original
+            if translated and len(translated) > 10 and translated != text:
+                return translated
+            else:
+                return text
             
         except Exception as e:
             st.warning(f"Erreur de traduction pour {content_type}: {e}")
@@ -148,24 +157,45 @@ class ArticleEvaluator:
         Titre: {article_title}
         Résumé: {article_summary}
 
-        Critères d'évaluation:
-        - Très pertinent (80-100): Impact direct sur l'activité, réglementation applicable, risque majeur
-        - Modérément pertinent (60-79): Intérêt professionnel, veille concurrentielle, évolution réglementaire
-        - Peu pertinent (40-59): Information générale, contexte industrie
-        - Non pertinent (0-39): Hors sujet, pas d'impact
+        CRITÈRES D'ÉVALUATION STRICTS:
+        
+        ⭐ Très pertinent (80-100): 
+        - Impact DIRECT sur les types de produits mentionnés dans le profil
+        - Réglementation APPLICABLE aux marchés spécifiés
+        - Risque majeur pour l'activité déclarée
+        
+        ⭐ Modérément pertinent (60-79):
+        - Lien indirect avec les produits/risques/marchés du profil
+        - Évolution réglementaire générale mais applicable
+        - Veille concurrentielle pertinente
+        
+        ⭐ Peu pertinent (40-59):
+        - Information générale sur l'industrie alimentaire
+        - Contexte réglementaire large
+        
+        ⭐ Non pertinent (0-39):
+        - Hors sujet par rapport au profil
+        - Concerne d'autres secteurs (ex: alimentation animale vs produits pour humains)
+        - Géographie non pertinente
+        - Types de produits/risques non couverts par le profil
+        
+        ATTENTION PARTICULIÈRE:
+        - Si l'article concerne l'alimentation animale et le profil les produits pour humains → Score faible
+        - Si l'article concerne des produits/marchés non mentionnés dans le profil → Score faible
+        - Soyez très strict sur la correspondance avec le profil utilisateur
 
         Répondez EXACTEMENT dans ce format:
         Pertinence: [Très pertinent/Modérément pertinent/Peu pertinent/Non pertinent]
         Score: [nombre entre 0 et 100]
-        Résumé: [En 1-2 phrases, pourquoi cet article est pertinent ou non pour ce profil]
+        Résumé: [En 1-2 phrases, expliquez la correspondance ou non-correspondance avec le profil utilisateur]
         """
         
         try:
             response = self.client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model="llama3-8b-8192",
-                temperature=0.1,
-                max_tokens=300,
+                temperature=0.0,  # Plus déterministe pour l'évaluation
+                max_tokens=400,
             )
             
             content = response.choices[0].message.content
@@ -475,7 +505,8 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
     # Message informatif sur la traduction
     translate_to_french = st.session_state.get('translate_to_french', False)
     if translate_to_french:
-        st.info(f"🇫🇷 **Mode traduction activé** : Les titres et résumés seront traduits en français automatiquement")
+        st.info(f"🇫🇷 **Mode traduction activé** : Les titres et résumés en anglais seront traduits automatiquement")
+        st.info("➡️ Vérifiez la sidebar pour les détails de traduction en temps réel")
     
     st.info(f"🔍 Évaluation de {len(all_articles)} articles...")
     
@@ -486,8 +517,15 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
     progress_bar = st.progress(0)
     progress_text = st.empty()
     
-    # Option de traduction
+    # Option de traduction et conteneur de debug
     translate_to_french = st.session_state.get('translate_to_french', False)
+    translation_debug = None
+    
+    if translate_to_french:
+        # Créer un conteneur de debug dans la sidebar
+        with st.sidebar:
+            st.markdown("**🔍 Debug Traduction en cours:**")
+            translation_debug = st.empty()
     
     for idx, article in enumerate(all_articles):
         progress_text.text(f"Évaluation {idx+1}/{len(all_articles)}: {article['source']}")
@@ -495,11 +533,31 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
         # Traduction optionnelle AVANT évaluation
         current_title = article['title']
         current_summary = article['summary']
+        translation_performed = False
         
         if translate_to_french:
-            with st.spinner(f"Traduction de l'article {idx+1}..."):
-                current_title = evaluator.translate_to_french(article['title'], "titre")
-                current_summary = evaluator.translate_to_french(article['summary'], "résumé")
+            progress_text.text(f"Traduction {idx+1}/{len(all_articles)}: {article['source']}")
+            
+            # Traduction du titre
+            translated_title = evaluator.translate_to_french(article['title'], "titre")
+            if translated_title != article['title']:
+                current_title = translated_title
+                translation_performed = True
+            
+            # Traduction du résumé
+            translated_summary = evaluator.translate_to_french(article['summary'], "résumé")
+            if translated_summary != article['summary']:
+                current_summary = translated_summary
+                translation_performed = True
+            
+            # Debug info dans la sidebar
+            if translation_debug is not None:
+                if translation_performed:
+                    translation_debug.success(f"✅ Article {idx+1}/{len(all_articles)} traduit ({article['source']})")
+                else:
+                    translation_debug.info(f"ℹ️ Article {idx+1}/{len(all_articles)} déjà en français ({article['source']})")
+        
+        progress_text.text(f"Évaluation {idx+1}/{len(all_articles)}: {article['source']}")
         
         # Évaluation avec le contenu (possiblement traduit)
         pertinence_level, evaluation_summary, score = evaluator.evaluate_pertinence(
@@ -522,13 +580,17 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
                 "Score": score,
                 "Évaluation de la Pertinence": evaluation_summary,
                 "raw_content": article.get('raw_content', ''),
-                "Traduit": translate_to_french
+                "Traduit": translation_performed
             })
         
         progress_bar.progress((idx + 1) / len(all_articles))
     
     progress_text.empty()
     progress_bar.empty()
+    
+    # Nettoyage du debug de traduction
+    if translate_to_french and translation_debug is not None:
+        translation_debug.empty()
     
     # Affichage des résultats
     if evaluated_articles:
