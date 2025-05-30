@@ -19,7 +19,6 @@ FRENCH_EU_RSS_FEEDS = {
     "EFSA": "https://www.efsa.europa.eu/en/all/rss",
     "EU Food Safety": "https://food.ec.europa.eu/node/2/rss_en",
     "Legifrance Alimentaire": "https://agriculture.gouv.fr/rss.xml",
-    "DGCCRF, French Fraud": "https://www.economie.gouv.fr/dgccrf/rss",
     "INRS secu": "https://www.inrs.fr/rss/?feed=actualites",
     "ANSES": "https://www.anses.fr/fr/flux-actualites.rss",
     "Health BE": "https://www.health.belgium.be/fr/rss/news.xml",
@@ -228,7 +227,9 @@ if st.button("Démarrer la Veille"):
             if pertinent_articles_data:
                 st.success(f"Trouvé {len(pertinent_articles_data)} articles pertinents.")
                 df = pd.DataFrame(pertinent_articles_data)
-                st.dataframe(df, use_container_width=True)
+                # Replace newlines with HTML line breaks for better display in Streamlit dataframe
+                df['Évaluation de la Pertinence'] = df['Évaluation de la Pertinence'].str.replace('\n', '<br>')
+                st.dataframe(df, use_container_width=True, unsafe_allow_html=True)
 
                 # Download buttons
                 csv_data = df.to_csv(index=False).encode('utf-8')
