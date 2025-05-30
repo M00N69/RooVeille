@@ -9,6 +9,8 @@ from io import BytesIO
 import concurrent.futures
 from typing import List, Dict, Tuple
 import time
+import re
+from html import unescape
 
 # --- Configuration ---
 PRODUCT_TYPES = ["Produits laitiers", "Viande", "Produits frais", "Produits de boulangerie", "Boissons", "Aliments transformés", "Autre"]
@@ -40,6 +42,55 @@ PERTINENCE_LEVELS = {
 }
 
 # --- Classes et fonctions optimisées ---
+
+def clean_html_content(html_content: str, preserve_basic_formatting: bool = True) -> str:
+    """Nettoie le contenu HTML pour l'affichage et l'analyse."""
+    if not html_content:
+        return ""
+    
+    # Decode HTML entities
+    cleaned = unescape(html_content)
+    
+    if preserve_basic_formatting:
+        # Remplace les balises de paragraphe par des retours à la ligne
+        cleaned = re.sub(r'</?p[^>]*>', '\n', cleaned)
+        cleaned = re.sub(r'<br[^>]*/?>', '\n', cleaned)
+        # Garde les listes avec des tirets
+        cleaned = re.sub(r'<li[^>]*>', '- ', cleaned)
+        cleaned = re.sub(r'</li>', '\n', cleaned)
+        # Supprime toutes les autres balises HTML
+        cleaned = re.sub(r'<[^>]+>', '', cleaned)
+    else:
+        # Supprime toutes les balises HTML
+        cleaned = re.sub(r'<[^>]+>', '', cleaned)
+    
+    # Nettoie les espaces multiples et retours à la ligne
+    cleaned = re.sub(r'\n\s*\n', '\n\n', cleaned)  # Double retours à la ligne max
+    cleaned = re.sub(r'[ \t]+', ' ', cleaned)  # Espaces multiples
+    cleaned = cleaned.strip()
+    
+    return cleaned
+
+def extract_content_from_entry(entry) -> str:
+    """Extrait le meilleur contenu disponible d'une entrée RSS."""
+    content = ""
+    
+    # 1. Priorité : content:encoded (plus détaillé)
+    if hasattr(entry, 'content') and entry.content:
+        try:
+            content = entry.content[0].value
+        except (IndexError, AttributeError):
+            pass
+    
+    # 2. Fallback : summary/description
+    if not content and hasattr(entry, 'summary'):
+        content = entry.summary
+    
+    # 3. Fallback final : title
+    if not content:
+        content = entry.title
+    
+    return content
 
 class ArticleEvaluator:
     def __init__(self, groq_api_key: str):
@@ -120,9 +171,12 @@ def fetch_rss_feed(url: str) -> List[Dict]:
         st.error(f"Erreur RSS {url}: {e}")
         return []
 
-def fetch_all_articles(feeds: Dict[str, str], start_date: datetime.date, end_date: datetime.date) -> List[Dict]:
-    """Récupère tous les articles en parallèle pour plus d'efficacité."""
+def fetch_all_articles(feeds: Dict[str, str], start_date: datetime.date, end_date: datetime.date, clean_html: bool = True) -> List[Dict]:
+    """Récupère tous les articles en parallèle avec extraction optimisée du contenu."""
     all_articles = []
+    
+    # Récupération de l'option de formatage depuis session_state ou valeur par défaut
+    preserve_formatting = st.session_state.get('preserve_formatting', True)
     
     with st.spinner("Récupération des flux RSS..."):
         progress_bar = st.progress(0)
@@ -146,10 +200,20 @@ def fetch_all_articles(feeds: Dict[str, str], start_date: datetime.date, end_dat
                             published_date = datetime.now().date()
                     
                     if published_date and start_date <= published_date <= end_date:
+                        # Extraction optimisée du contenu
+                        raw_content = extract_content_from_entry(entry)
+                        
+                        # Nettoyage HTML optionnel
+                        if clean_html:
+                            summary = clean_html_content(raw_content, preserve_basic_formatting=preserve_formatting)
+                        else:
+                            summary = raw_content
+                        
                         all_articles.append({
                             "source": source_name,
                             "title": entry.title,
-                            "summary": getattr(entry, 'summary', entry.title),
+                            "summary": summary,
+                            "raw_content": raw_content,  # Garde la version brute pour debug
                             "link": entry.link,
                             "published": published_date
                         })
@@ -164,22 +228,24 @@ def fetch_all_articles(feeds: Dict[str, str], start_date: datetime.date, end_dat
 def create_enhanced_dataframe(articles_data: List[Dict]) -> pd.DataFrame:
     """Crée un DataFrame optimisé pour l'affichage avec retours à la ligne."""
     if not articles_data:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=['Source', 'Titre', 'Résumé', 'Score', 'Date', 'Évaluation', 'Lien'])
     
     df = pd.DataFrame(articles_data)
     
-    # Formatage amélioré des colonnes
-    df['Titre_Display'] = df['Titre'].apply(lambda x: x[:100] + "..." if len(x) > 100 else x)
-    df['Résumé_Display'] = df['Résumé'].apply(lambda x: x[:200] + "..." if len(x) > 200 else x)
-    df['Score_Display'] = df['Score'].apply(lambda x: f"{x}/100")
+    # Formatage des colonnes pour l'affichage
+    display_data = []
+    for _, row in df.iterrows():
+        display_data.append({
+            'Source': str(row['Source']),
+            'Titre': str(row['Titre'])[:100] + ("..." if len(str(row['Titre'])) > 100 else ""),
+            'Résumé': str(row['Résumé'])[:200] + ("..." if len(str(row['Résumé'])) > 200 else ""),
+            'Score': int(row['Score']),
+            'Date': str(row['Date de Publication']),
+            'Évaluation': str(row['Évaluation de la Pertinence']),
+            'Lien': str(row['Lien'])
+        })
     
-    # Réorganisation des colonnes pour l'affichage
-    display_df = df[['Source', 'Titre_Display', 'Résumé_Display', 'Score_Display', 
-                     'Date de Publication', 'Évaluation de la Pertinence', 'Lien']].copy()
-    
-    display_df.columns = ['Source', 'Titre', 'Résumé', 'Score', 'Date', 'Évaluation', 'Lien']
-    
-    return display_df
+    return pd.DataFrame(display_data)
 
 # --- Interface Streamlit optimisée ---
 
@@ -210,6 +276,20 @@ with st.sidebar:
         "Nombre maximum d'articles à évaluer",
         [10, 20, 50, 100],
         index=1
+    )
+    
+    # Options de parsing
+    st.subheader("🔧 Options de parsing")
+    clean_html = st.checkbox(
+        "Nettoyer le HTML des résumés",
+        value=True,
+        help="Convertit le HTML en texte lisible (recommandé pour Health BE)"
+    )
+    
+    preserve_formatting = st.checkbox(
+        "Préserver le formatage de base",
+        value=True,
+        help="Garde les paragraphes et listes lors du nettoyage HTML"
     )
 
 # --- Profil utilisateur (simplifié) ---
@@ -277,7 +357,7 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
         st.stop()
     
     # Récupération des articles
-    all_articles = fetch_all_articles(FRENCH_EU_RSS_FEEDS, start_date, end_date)
+    all_articles = fetch_all_articles(FRENCH_EU_RSS_FEEDS, start_date, end_date, clean_html)
     
     if not all_articles:
         st.warning("Aucun article trouvé dans la période spécifiée")
