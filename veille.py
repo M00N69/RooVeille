@@ -13,29 +13,13 @@ MARKETS = ["UE", "US", "Canada", "Royaume-Uni", "France", "International", "Autr
 
 # Flux RSS (d'après l'exemple de l'utilisateur)
 RSS_FEEDS = {
-    "Food safety Magazine": "https://www.food-safety.com/rss/topic/296",
-    "Food SafetyTech": "https://foodsafetytech.com/feed/",
-    "Food Navigator": "https://www.foodnavigator.com/Info/Latest-News",
-    "Food GOV UK": "https://www.food.gov.uk/rss-feed/news",
-    "US CDC": "https://www2c.cdc.gov/podcasts/createrss.asp?c=146",
-    "US FDA Press Release": "https://www.fda.gov/about-fda/contact-fda/stay-informed/rss-feeds/press-releases/rss.xml",
-    "Food in Canada": "https://www.foodincanada.com/feed/",
     "CODEX Hygiene meeting": "https://www.fao.org/fao-who-codexalimentarius/meetings/detail/rss/fr/?meeting=CCFH&session=54",
-    "RASFF EU Feed": "https://webgate.ec.europa.eu/rasff-window/backend/public/consumer/rss/all/",
     "EFSA": "https://www.efsa.europa.eu/en/all/rss",
     "EU Food Safety": "https://food.ec.europa.eu/node/2/rss_en",
-    "Food Quality & Safety": "https://www.foodqualityandsafety.com/category/eupdate/feed/",
-    "Food Safety News": "https://feeds.lexblog.com/foodsafetynews/mRcs",
-    "Food Manufacture": "https://www.foodmanufacture.co.uk/Info/FoodManufacture-RSS",
-    "Food Packaging Forum": "https://www.foodpackagingforum.org/news/feed/",
-    "Food Safety Expert": "https://www.foodsafety-experts.com/feed/",
-    "French Recalls RAPPELCONSO": "https://rappel.conso.gouv.fr/rss?categorie=01",
     "Legifrance Alimentaire": "https://agriculture.gouv.fr/rss.xml",
-    "DGCCRF, French Fraud": "https://www.economie.gouv.fr/dgccrf/rss",
     "INRS secu": "https://www.inrs.fr/rss/?feed=actualites",
     "ANSES": "https://www.anses.fr/fr/flux-actualites.rss",
     "Health BE": "https://www.health.belgium.be/fr/rss/news.xml",
-    "Food Ingredient first": "https://resource.innovadatabase.com/rss/fifnews.xml"
 }
 
 # Mots-clés prédéfinis sur la sécurité alimentaire pour le contexte de l'API Groq
