@@ -17,7 +17,7 @@ PRODUCT_TYPES = ["Produits laitiers", "Viande", "Produits frais", "Produits de b
 RISK_TYPES = ["Microbiologique", "Chimique", "Physique", "Allergène", "Fraude", "Autre"]
 MARKETS = ["UE", "US", "Canada", "Royaume-Uni", "France", "International", "Autre"]
 
-# Flux RSS optimisés
+# Flux RSS optimisés avec gestion spéciale pour Health BE
 FRENCH_EU_RSS_FEEDS = {
     "RASFF EU Feed": "https://webgate.ec.europa.eu/rasff-window/backend/public/consumer/rss/all/",
     "EFSA": "https://www.efsa.europa.eu/en/all/rss",
@@ -140,33 +140,70 @@ class ArticleEvaluator:
     
     def _parse_evaluation(self, response: str) -> Tuple[str, str, int]:
         """Parse la réponse de l'API pour extraire pertinence, score et résumé."""
+        # Valeurs par défaut sécurisées
         pertinence_level = "Non pertinent"
         summary = "Impossible d'évaluer"
         score = 0
         
-        lines = response.split('\n')
-        for line in lines:
-            line = line.strip()
-            if line.startswith("Pertinence:"):
-                pertinence_level = line.replace("Pertinence:", "").strip()
-            elif line.startswith("Score:"):
-                try:
-                    score = int(line.replace("Score:", "").strip())
-                except ValueError:
-                    score = 0
-            elif line.startswith("Résumé:"):
-                summary = line.replace("Résumé:", "").strip()
+        if not response:
+            return pertinence_level, summary, score
+        
+        try:
+            lines = response.split('\n')
+            for line in lines:
+                line = line.strip()
+                if line.startswith("Pertinence:"):
+                    level_text = line.replace("Pertinence:", "").strip()
+                    # Validation des niveaux acceptés
+                    valid_levels = ["Très pertinent", "Modérément pertinent", "Peu pertinent", "Non pertinent"]
+                    if level_text in valid_levels:
+                        pertinence_level = level_text
+                elif line.startswith("Score:"):
+                    try:
+                        score_text = line.replace("Score:", "").strip()
+                        # Extraction du nombre même s'il y a du texte autour
+                        score_match = re.search(r'\d+', score_text)
+                        if score_match:
+                            score = int(score_match.group())
+                            score = max(0, min(100, score))  # Clamp entre 0 et 100
+                    except (ValueError, AttributeError):
+                        score = 0
+                elif line.startswith("Résumé:"):
+                    summary_text = line.replace("Résumé:", "").strip()
+                    if summary_text:
+                        summary = summary_text[:300]  # Limite la taille
+        
+        except Exception as e:
+            st.warning(f"Erreur lors du parsing de l'évaluation : {e}")
         
         return pertinence_level, summary, score
 
-@st.cache_data(ttl=1800)  # Cache réduit à 30 minutes pour plus de fraîcheur
+@st.cache_data(ttl=1800, show_spinner="Récupération RSS...")
 def fetch_rss_feed(url: str) -> List[Dict]:
     """Récupère les entrées RSS avec gestion d'erreur améliorée."""
     try:
-        feed = feedparser.parse(url)
-        if feed.bozo:
-            st.warning(f"Problème de parsing pour {url}")
+        # Headers pour éviter les blocages
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        # Tentative avec requests d'abord pour les URLs problématiques
+        if 'health.belgium.be' in url:
+            try:
+                response = requests.get(url, headers=headers, timeout=10)
+                response.raise_for_status()
+                feed = feedparser.parse(response.content)
+            except Exception as e:
+                st.warning(f"Erreur requests pour {url}, tentative feedparser direct: {e}")
+                feed = feedparser.parse(url)
+        else:
+            feed = feedparser.parse(url)
+        
+        if feed.bozo and feed.bozo_exception:
+            st.warning(f"Problème de parsing pour {url}: {feed.bozo_exception}")
+        
         return feed.entries
+        
     except Exception as e:
         st.error(f"Erreur RSS {url}: {e}")
         return []
@@ -183,46 +220,76 @@ def fetch_all_articles(feeds: Dict[str, str], start_date: datetime.date, end_dat
         
         for idx, (source_name, url) in enumerate(feeds.items()):
             try:
-                entries = fetch_rss_feed(url)
+                with st.spinner(f"Récupération de {source_name}..."):
+                    entries = fetch_rss_feed(url)
+                    
+                    if not entries:
+                        st.warning(f"Aucune entrée trouvée pour {source_name}")
+                        continue
                 
                 for entry in entries:
-                    published_date = None
-                    
-                    # Gestion améliorée des dates
-                    if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                        published_date = datetime(*entry.published_parsed[:6]).date()
-                    elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                        published_date = datetime(*entry.updated_parsed[:6]).date()
-                    elif hasattr(entry, 'published'):
-                        try:
-                            published_date = datetime.strptime(entry.published, '%a, %d %b %Y %H:%M:%S %Z').date()
-                        except:
+                    try:
+                        published_date = None
+                        
+                        # Gestion améliorée des dates
+                        if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                            published_date = datetime(*entry.published_parsed[:6]).date()
+                        elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                            published_date = datetime(*entry.updated_parsed[:6]).date()
+                        elif hasattr(entry, 'published'):
+                            try:
+                                # Essayer différents formats de date
+                                for fmt in ['%a, %d %b %Y %H:%M:%S %Z', '%a, %d %b %Y %H:%M:%S %z', '%Y-%m-%d']:
+                                    try:
+                                        published_date = datetime.strptime(entry.published, fmt).date()
+                                        break
+                                    except ValueError:
+                                        continue
+                            except:
+                                published_date = datetime.now().date()
+                        
+                        # Si pas de date trouvée, utiliser la date actuelle
+                        if not published_date:
                             published_date = datetime.now().date()
-                    
-                    if published_date and start_date <= published_date <= end_date:
-                        # Extraction optimisée du contenu
-                        raw_content = extract_content_from_entry(entry)
                         
-                        # Nettoyage HTML optionnel
-                        if clean_html:
-                            summary = clean_html_content(raw_content, preserve_basic_formatting=preserve_formatting)
-                        else:
-                            summary = raw_content
-                        
-                        all_articles.append({
-                            "source": source_name,
-                            "title": entry.title,
-                            "summary": summary,
-                            "raw_content": raw_content,  # Garde la version brute pour debug
-                            "link": entry.link,
-                            "published": published_date
-                        })
+                        if start_date <= published_date <= end_date:
+                            # Extraction optimisée du contenu
+                            raw_content = extract_content_from_entry(entry)
+                            
+                            # Validation du contenu
+                            if not raw_content or len(raw_content.strip()) < 10:
+                                raw_content = getattr(entry, 'title', 'Contenu non disponible')
+                            
+                            # Nettoyage HTML optionnel
+                            if clean_html:
+                                summary = clean_html_content(raw_content, preserve_basic_formatting=preserve_formatting)
+                            else:
+                                summary = raw_content
+                            
+                            # Validation finale
+                            if not summary or len(summary.strip()) < 5:
+                                summary = "Résumé non disponible"
+                            
+                            all_articles.append({
+                                "source": source_name,
+                                "title": getattr(entry, 'title', 'Titre non disponible'),
+                                "summary": summary,
+                                "raw_content": raw_content,
+                                "link": getattr(entry, 'link', '#'),
+                                "published": published_date
+                            })
+                            
+                    except Exception as e:
+                        st.warning(f"Erreur lors du traitement d'un article de {source_name}: {e}")
+                        continue
                         
                 progress_bar.progress((idx + 1) / len(feeds))
                 
             except Exception as e:
-                st.warning(f"Erreur lors de la récupération de {source_name}: {e}")
+                st.error(f"Erreur lors de la récupération de {source_name}: {e}")
+                continue
     
+    st.success(f"✅ {len(all_articles)} articles récupérés au total")
     return all_articles
 
 def create_enhanced_dataframe(articles_data: List[Dict]) -> pd.DataFrame:
@@ -230,20 +297,50 @@ def create_enhanced_dataframe(articles_data: List[Dict]) -> pd.DataFrame:
     if not articles_data:
         return pd.DataFrame(columns=['Source', 'Titre', 'Résumé', 'Score', 'Date', 'Évaluation', 'Lien'])
     
-    df = pd.DataFrame(articles_data)
-    
-    # Formatage des colonnes pour l'affichage
+    # Nettoyage et formatage sécurisé des données
     display_data = []
-    for _, row in df.iterrows():
-        display_data.append({
-            'Source': str(row['Source']),
-            'Titre': str(row['Titre'])[:100] + ("..." if len(str(row['Titre'])) > 100 else ""),
-            'Résumé': str(row['Résumé'])[:200] + ("..." if len(str(row['Résumé'])) > 200 else ""),
-            'Score': int(row['Score']),
-            'Date': str(row['Date de Publication']),
-            'Évaluation': str(row['Évaluation de la Pertinence']),
-            'Lien': str(row['Lien'])
-        })
+    for article in articles_data:
+        try:
+            # Nettoyage et validation de chaque champ
+            source = str(article.get('Source', 'N/A')).strip()
+            titre = str(article.get('Titre', 'N/A')).strip()
+            resume = str(article.get('Résumé', 'N/A')).strip()
+            score = article.get('Score', 0)
+            date = str(article.get('Date de Publication', 'N/A')).strip()
+            evaluation = str(article.get('Évaluation de la Pertinence', 'N/A')).strip()
+            lien = str(article.get('Lien', 'N/A')).strip()
+            
+            # Validation du score
+            try:
+                score = int(float(score)) if score is not None else 0
+                score = max(0, min(100, score))  # Clamp entre 0 et 100
+            except (ValueError, TypeError):
+                score = 0
+            
+            # Troncature des textes longs
+            if len(titre) > 100:
+                titre = titre[:97] + "..."
+            if len(resume) > 200:
+                resume = resume[:197] + "..."
+            if len(evaluation) > 150:
+                evaluation = evaluation[:147] + "..."
+            
+            display_data.append({
+                'Source': source,
+                'Titre': titre,
+                'Résumé': resume,
+                'Score': score,
+                'Date': date,
+                'Évaluation': evaluation,
+                'Lien': lien
+            })
+            
+        except Exception as e:
+            st.warning(f"Erreur lors du formatage d'un article : {e}")
+            continue
+    
+    if not display_data:
+        return pd.DataFrame(columns=['Source', 'Titre', 'Résumé', 'Score', 'Date', 'Évaluation', 'Lien'])
     
     return pd.DataFrame(display_data)
 
@@ -257,6 +354,7 @@ st.set_page_config(
 
 st.title("🔍 Veille Réglementaire - Sécurité Alimentaire")
 st.markdown("*Application optimisée pour consultants et auditeurs food safety*")
+st.markdown("✨ **Nouveau** : Extraction optimisée du contenu RSS (content:encoded pour Health BE)")
 
 # Sidebar pour la configuration
 with st.sidebar:
@@ -280,17 +378,31 @@ with st.sidebar:
     
     # Options de parsing
     st.subheader("🔧 Options de parsing")
-    clean_html = st.checkbox(
+    
+    st.session_state['clean_html'] = st.checkbox(
         "Nettoyer le HTML des résumés",
         value=True,
         help="Convertit le HTML en texte lisible (recommandé pour Health BE)"
     )
     
-    preserve_formatting = st.checkbox(
+    st.session_state['preserve_formatting'] = st.checkbox(
         "Préserver le formatage de base",
         value=True,
         help="Garde les paragraphes et listes lors du nettoyage HTML"
     )
+    
+    # Information sur l'extraction de contenu
+    with st.expander("ℹ️ Extraction de contenu"):
+        st.markdown("""
+        **Ordre de priorité pour le contenu:**
+        1. `content:encoded` (plus détaillé, notamment Health BE)
+        2. `summary/description` (fallback standard)
+        3. `title` (fallback minimal)
+        
+        **Health BE** : Utilise `content:encoded` avec HTML riche
+        """)
+    
+    clean_html = st.session_state.get('clean_html', True)
 
 # --- Profil utilisateur (simplifié) ---
 with st.expander("🏢 Profil d'Activité", expanded=True):
@@ -394,7 +506,8 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
                 "Date de Publication": article['published'].strftime('%Y-%m-%d'),
                 "Niveau de Pertinence": pertinence_level,
                 "Score": score,
-                "Évaluation de la Pertinence": evaluation_summary
+                "Évaluation de la Pertinence": evaluation_summary,
+                "raw_content": article.get('raw_content', '')  # Garde le contenu brut pour debug
             })
         
         progress_bar.progress((idx + 1) / len(all_articles))
