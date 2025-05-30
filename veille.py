@@ -92,13 +92,22 @@ def extract_content_from_entry(entry) -> str:
     return content
 
 class ArticleEvaluator:
+    GROQ_MODEL = "llama3-8b-8192"
+    MAX_TOKENS_TRANSLATE = 500
+    MAX_TOKENS_EVALUATE = 400
+
     def __init__(self, groq_api_key: str):
         self.client = Groq(api_key=groq_api_key) if groq_api_key else None
     
-    def translate_to_french(self, text: str, content_type: str = "texte") -> str:
-        """Traduit un texte en français en utilisant Groq."""
+    def translate_to_french(self, text: str, content_type: str = "texte") -> Tuple[str, bool]:
+        """
+        Traduit un texte en français en utilisant Groq.
+        Retourne un tuple: (texte_resultat, bool_tentative_traduction)
+        bool_tentative_traduction est True si une requête API a été faite, False sinon.
+        """
+        translation_attempted = False
         if not self.client or not text or len(text.strip()) < 3:
-            return text
+            return text, translation_attempted
         
         # Détection plus robuste de l'anglais
         english_words = ['the', 'and', 'of', 'in', 'to', 'for', 'with', 'on', 'at', 'by', 'from', 'as', 'is', 'are', 'was', 'were', 'been', 'have', 'has', 'had', 'will', 'would', 'could', 'should', 'may', 'might', 'can', 'must']
@@ -110,8 +119,9 @@ class ArticleEvaluator:
         
         # Si moins de 20% de mots anglais détectés, probablement déjà en français
         if word_count > 0 and (english_count / word_count) < 0.2:
-            return text
+            return text, translation_attempted # Pas de tentative de traduction
         
+        translation_attempted = True # Marquer comme tentative si on passe l'heuristique
         try:
             prompt = f"""
             Traduisez ce {content_type} scientifique en français professionnel.
@@ -125,22 +135,23 @@ class ArticleEvaluator:
             
             response = self.client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model="llama3-8b-8192",
+                model=self.GROQ_MODEL,
                 temperature=0.0,  # Plus déterministe
-                max_tokens=500,
+                max_tokens=self.MAX_TOKENS_TRANSLATE,
             )
             
             translated = response.choices[0].message.content.strip()
             
             # Vérifie que la traduction n'est pas vide et différente de l'original
             if translated and len(translated) > 10 and translated != text:
-                return translated
+                return translated, translation_attempted
             else:
-                return text
+                # La traduction a échoué ou n'est pas satisfaisante
+                return text, translation_attempted
             
         except Exception as e:
-            st.warning(f"Erreur de traduction pour {content_type}: {e}")
-            return text
+            st.warning(f"Erreur de traduction pour {content_type}: {e}. Veuillez vérifier votre clé API Groq et votre connexion réseau.")
+            return text, translation_attempted # Retourne l'original mais signale la tentative
         
     def evaluate_pertinence(self, article_title: str, article_summary: str, user_context: str) -> Tuple[str, str, int]:
         """Évalue la pertinence avec un score numérique pour un meilleur filtrage."""
@@ -193,16 +204,16 @@ class ArticleEvaluator:
         try:
             response = self.client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model="llama3-8b-8192",
+                model=self.GROQ_MODEL,
                 temperature=0.0,  # Plus déterministe pour l'évaluation
-                max_tokens=400,
+                max_tokens=self.MAX_TOKENS_EVALUATE,
             )
             
             content = response.choices[0].message.content
             return self._parse_evaluation(content)
             
         except Exception as e:
-            st.error(f"Erreur API Groq: {e}")
+            st.error(f"Erreur API Groq: {e}. Veuillez vérifier votre clé API Groq et votre connexion réseau.")
             return "Non pertinent", "Erreur d'évaluation", 0
     
     def _parse_evaluation(self, response: str) -> Tuple[str, str, int]:
@@ -218,26 +229,31 @@ class ArticleEvaluator:
         try:
             lines = response.split('\n')
             for line in lines:
-                line = line.strip()
-                if line.startswith("Pertinence:"):
-                    level_text = line.replace("Pertinence:", "").strip()
+                line_stripped = line.strip() # For whitespace
+                if line_stripped.lower().startswith("pertinence:"):
+                    level_text = line_stripped[len("Pertinence:"):].strip()
                     # Validation des niveaux acceptés
                     valid_levels = ["Très pertinent", "Modérément pertinent", "Peu pertinent", "Non pertinent"]
-                    if level_text in valid_levels:
+                    if level_text in valid_levels: # Preserves original casing if valid
                         pertinence_level = level_text
-                elif line.startswith("Score:"):
+                    # Handle cases where LLM might output "Pertinence: Très Pertinent" (title case)
+                    # by checking title case version if direct match fails.
+                    elif level_text.title() in valid_levels:
+                         pertinence_level = level_text.title()
+
+                elif line_stripped.lower().startswith("score:"):
+                    score_text = line_stripped[len("Score:"):].strip()
                     try:
-                        score_text = line.replace("Score:", "").strip()
                         # Extraction du nombre même s'il y a du texte autour
                         score_match = re.search(r'\d+', score_text)
                         if score_match:
                             score = int(score_match.group())
                             score = max(0, min(100, score))  # Clamp entre 0 et 100
                     except (ValueError, AttributeError):
-                        score = 0
-                elif line.startswith("Résumé:"):
-                    summary_text = line.replace("Résumé:", "").strip()
-                    if summary_text:
+                        score = 0 # Default if parsing fails
+                elif line_stripped.lower().startswith("résumé:"): # French 'Résumé'
+                    summary_text = line_stripped[len("Résumé:"):].strip()
+                    if summary_text: # Ensure not empty
                         summary = summary_text[:300]  # Limite la taille
         
         except Exception as e:
@@ -278,6 +294,7 @@ def fetch_rss_feed(url: str) -> List[Dict]:
 def fetch_all_articles(feeds: Dict[str, str], start_date: datetime.date, end_date: datetime.date, clean_html: bool = True) -> List[Dict]:
     """Récupère tous les articles en parallèle avec extraction optimisée du contenu."""
     all_articles = []
+    failed_feeds = []
     
     # Récupération de l'option de formatage depuis session_state ou valeur par défaut
     preserve_formatting = st.session_state.get('preserve_formatting', True)
@@ -292,6 +309,8 @@ def fetch_all_articles(feeds: Dict[str, str], start_date: datetime.date, end_dat
                     
                     if not entries:
                         st.warning(f"Aucune entrée trouvée pour {source_name}")
+                        if source_name not in failed_feeds: # Avoid duplicates
+                            failed_feeds.append(source_name)
                         continue
                 
                 for entry in entries:
@@ -312,7 +331,10 @@ def fetch_all_articles(feeds: Dict[str, str], start_date: datetime.date, end_dat
                                         break
                                     except ValueError:
                                         continue
-                            except:
+                            except Exception as e_parse_str_date:
+                                # If parsing fails, default to now, and optionally log or inform user
+                                # For now, just using a default. A debug message could be added.
+                                # st.sidebar.caption(f"Debug: Date parse error for '{entry.get('title', 'Unknown title')}', used current date. Error: {e_parse_str_date}")
                                 published_date = datetime.now().date()
                         
                         # Si pas de date trouvée, utiliser la date actuelle
@@ -354,9 +376,16 @@ def fetch_all_articles(feeds: Dict[str, str], start_date: datetime.date, end_dat
                 
             except Exception as e:
                 st.error(f"Erreur lors de la récupération de {source_name}: {e}")
+                if source_name not in failed_feeds: # Avoid duplicates
+                    failed_feeds.append(source_name)
                 continue
     
     st.success(f"✅ {len(all_articles)} articles récupérés au total")
+
+    if failed_feeds:
+        unique_failed_feeds = sorted(list(set(failed_feeds)))
+        st.warning(f"⚠️ Problèmes rencontrés avec les flux suivants : {', '.join(unique_failed_feeds)}. Certains articles de ces sources pourraient manquer.")
+
     return all_articles
 
 # --- Interface Streamlit optimisée ---
@@ -426,8 +455,6 @@ with st.sidebar:
         **🇫🇷 Traduction** : Les articles EFSA/EU (en anglais) peuvent être traduits automatiquement
         """)
     
-    clean_html = st.session_state.get('clean_html', True)
-
 # --- Profil utilisateur (simplifié) ---
 with st.expander("🏢 Profil d'Activité", expanded=True):
     col1, col2 = st.columns(2)
@@ -483,7 +510,7 @@ with col3:
                                    help="Nécessaire pour l'évaluation de pertinence")
 
 # --- Lancement de la veille ---
-if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
+if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True, disabled=not groq_api_key):
     if not groq_api_key:
         st.error("Clé API Groq requise pour l'évaluation de pertinence")
         st.stop()
@@ -493,7 +520,7 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
         st.stop()
     
     # Récupération des articles
-    all_articles = fetch_all_articles(FRENCH_EU_RSS_FEEDS, start_date, end_date, clean_html)
+    all_articles = fetch_all_articles(FRENCH_EU_RSS_FEEDS, start_date, end_date, st.session_state.get('clean_html', True))
     
     if not all_articles:
         st.warning("Aucun article trouvé dans la période spécifiée")
@@ -533,30 +560,44 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
         # Traduction optionnelle AVANT évaluation
         current_title = article['title']
         current_summary = article['summary']
-        translation_performed = False
+        translation_performed_for_article = False # Pour marquer si au moins un des champs a été réellement changé
         
         if translate_to_french:
             progress_text.text(f"Traduction {idx+1}/{len(all_articles)}: {article['source']}")
             
-            # Traduction du titre
-            translated_title = evaluator.translate_to_french(article['title'], "titre")
-            if translated_title != article['title']:
-                current_title = translated_title
-                translation_performed = True
+            original_title = article['title']
+            original_summary = article['summary']
+
+            translated_title_text, title_translation_attempted = evaluator.translate_to_french(original_title, "titre")
+            summary_translation_text, summary_translation_attempted = evaluator.translate_to_french(original_summary, "résumé")
+
+            title_changed = (translated_title_text != original_title)
+            summary_changed = (summary_translation_text != original_summary)
+
+            current_title = translated_title_text
+            current_summary = summary_translation_text
             
-            # Traduction du résumé
-            translated_summary = evaluator.translate_to_french(article['summary'], "résumé")
-            if translated_summary != article['summary']:
-                current_summary = translated_summary
-                translation_performed = True
-            
+            if title_changed or summary_changed:
+                translation_performed_for_article = True
+
             # Debug info dans la sidebar
             if translation_debug is not None:
-                if translation_performed:
-                    translation_debug.success(f"✅ Article {idx+1}/{len(all_articles)} traduit ({article['source']})")
-                else:
-                    translation_debug.info(f"ℹ️ Article {idx+1}/{len(all_articles)} déjà en français ({article['source']})")
-        
+                # Titre
+                if not title_translation_attempted:
+                    translation_debug.info(f"ℹ️ Titre Art.{idx+1} ({article['source']}): Non traduit (déjà FR)")
+                elif title_changed:
+                    translation_debug.success(f"✅ Titre Art.{idx+1} ({article['source']}): Traduit")
+                else: # Tentative mais pas de changement ou échec qualité
+                    translation_debug.warning(f"⚠️ Titre Art.{idx+1} ({article['source']}): Original conservé (trad. insatisfaisante/échec)")
+
+                # Résumé
+                if not summary_translation_attempted:
+                    translation_debug.info(f"ℹ️ Résumé Art.{idx+1} ({article['source']}): Non traduit (déjà FR)")
+                elif summary_changed:
+                    translation_debug.success(f"✅ Résumé Art.{idx+1} ({article['source']}): Traduit")
+                else: # Tentative mais pas de changement ou échec qualité
+                    translation_debug.warning(f"⚠️ Résumé Art.{idx+1} ({article['source']}): Original conservé (trad. insatisfaisante/échec)")
+
         progress_text.text(f"Évaluation {idx+1}/{len(all_articles)}: {article['source']}")
         
         # Évaluation avec le contenu (possiblement traduit)
@@ -580,7 +621,7 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True):
                 "Score": score,
                 "Évaluation de la Pertinence": evaluation_summary,
                 "raw_content": article.get('raw_content', ''),
-                "Traduit": translation_performed
+                "Traduit": translation_performed_for_article # Utilise le nouveau flag
             })
         
         progress_bar.progress((idx + 1) / len(all_articles))
