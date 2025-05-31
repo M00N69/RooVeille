@@ -922,8 +922,11 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True, 
                             # Affichage du titre avec indicateur de traduction
                             if article.get('Traduit', False):
                                 st.markdown(f"**📰 Titre (🇫🇷 traduit) :** {article['Titre']}")
-                                with st.expander("👁️ Voir le titre original"):
-                                    st.markdown(f"**🔤 Original :** {article.get('Titre Original', 'N/A')}")
+                                
+                                # Utilisation d'un toggle button au lieu d'un expander imbriqué
+                                show_original_title = st.checkbox("👁️ Voir titre original", key=f"title_orig_{idx}")
+                                if show_original_title:
+                                    st.info(f"**🔤 Titre original :** {article.get('Titre Original', 'N/A')}")
                             else:
                                 st.markdown(f"**📰 Titre :** {article['Titre']}")
                             
@@ -931,7 +934,11 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True, 
                             if article.get('Traduit', False):
                                 st.markdown(f"**📝 Résumé (🇫🇷 traduit) :**")
                                 st.write(article['Résumé'])
-                                with st.expander("👁️ Voir le résumé original"):
+                                
+                                # Utilisation d'un toggle button au lieu d'un expander imbriqué
+                                show_original_summary = st.checkbox("👁️ Voir résumé original", key=f"summary_orig_{idx}")
+                                if show_original_summary:
+                                    st.info(f"**📝 Résumé original :**")
                                     st.write(article.get('Résumé Original', 'N/A'))
                             else:
                                 st.markdown(f"**📝 Résumé :**")
