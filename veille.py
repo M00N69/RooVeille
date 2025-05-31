@@ -94,7 +94,7 @@ def extract_content_from_entry(entry) -> str:
 class ArticleEvaluator:
     GROQ_MODEL = "llama3-8b-8192"
     MAX_TOKENS_TRANSLATE = 500
-    MAX_TOKENS_EVALUATE = 400
+    MAX_TOKENS_EVALUATE = 600  # Augmenté pour permettre une évaluation plus détaillée
 
     def __init__(self, groq_api_key: str):
         self.client = Groq(api_key=groq_api_key) if groq_api_key else None
@@ -154,51 +154,89 @@ class ArticleEvaluator:
             return text, translation_attempted # Retourne l'original mais signale la tentative
         
     def evaluate_pertinence(self, article_title: str, article_summary: str, user_context: str) -> Tuple[str, str, int]:
-        """Évalue la pertinence avec un score numérique pour un meilleur filtrage."""
+        """Évalue la pertinence avec des critères TRÈS STRICTS sur la correspondance avec les types de produits."""
         if not self.client:
             return "Non pertinent", "Clé API manquante", 0
 
         prompt = f"""
-        Vous êtes un expert en sécurité alimentaire. Évaluez la pertinence de cet article pour un professionnel avec le profil suivant.
+        Vous êtes un expert en sécurité alimentaire européenne. Vous devez évaluer la pertinence de cet article pour un consultant/auditeur avec un profil TRÈS SPÉCIFIQUE.
 
-        PROFIL UTILISATEUR:
+        PROFIL UTILISATEUR DÉTAILLÉ:
         {user_context}
 
         ARTICLE À ÉVALUER:
         Titre: {article_title}
         Résumé: {article_summary}
 
-        CRITÈRES D'ÉVALUATION STRICTS:
+        ⚠️ RÈGLES D'ÉVALUATION ULTRA-STRICTES ⚠️
+
+        🔴 EXCLUSIONS AUTOMATIQUES (Score 0-20):
+        - Alimentation animale / feed (sauf si profil inclut explicitement l'alimentation animale)
+        - Cosmétiques, médicaments, dispositifs médicaux
+        - Agriculture générale sans lien avec transformation alimentaire
+        - Recherche fondamentale sans application pratique immédiate
+        - Géographies non mentionnées dans le profil (ex: Asie si profil UE uniquement)
+        - Types de produits NON listés dans le profil (ex: seafood si profil uniquement viande)
+        - Articles génériques sur "food" sans spécification de produit
+
+        🟠 PERTINENCE FAIBLE (Score 21-45):
+        - Réglementation générale UE sans impact spécifique sur les produits du profil
+        - Mentions tangentielles des types de produits sans focus principal
+        - Contexte industrie alimentaire large mais pas les produits spécifiques
+        - Nouvelles méthodologies analytiques générales
+
+        🟡 PERTINENCE MODÉRÉE (Score 46-70):
+        - Réglementation applicable aux produits du profil mais impact indirect
+        - Types de risques mentionnés dans le profil mais sur d'autres produits
+        - Évolutions générales des marchés spécifiés
+        - Études sur des dangers pertinents mais produits différents
+
+        🟢 TRÈS PERTINENT (Score 71-100):
+        - CORRESPONDANCE EXACTE : Type de produit + Type de risque + Marché du profil
+        - Nouvelles réglementations DIRECTEMENT applicables aux produits du profil
+        - Rappels/alertes sur les types de produits spécifiques du profil
+        - Nouveaux dangers sur les produits et marchés du profil
+        - Nouvelles méthodes d'analyse pour les produits du profil
+
+        EXEMPLES CONCRETS DE SCORING:
         
-        ⭐ Très pertinent (80-100): 
-        - Impact DIRECT sur les types de produits mentionnés dans le profil
-        - Réglementation APPLICABLE aux marchés spécifiés
-        - Risque majeur pour l'activité déclarée
-        
-        ⭐ Modérément pertinent (60-79):
-        - Lien indirect avec les produits/risques/marchés du profil
-        - Évolution réglementaire générale mais applicable
-        - Veille concurrentielle pertinente
-        
-        ⭐ Peu pertinent (40-59):
-        - Information générale sur l'industrie alimentaire
-        - Contexte réglementaire large
-        
-        ⭐ Non pertinent (0-39):
-        - Hors sujet par rapport au profil
-        - Concerne d'autres secteurs (ex: alimentation animale vs produits pour humains)
-        - Géographie non pertinente
-        - Types de produits/risques non couverts par le profil
-        
-        ATTENTION PARTICULIÈRE:
-        - Si l'article concerne l'alimentation animale et le profil les produits pour humains → Score faible
-        - Si l'article concerne des produits/marchés non mentionnés dans le profil → Score faible
-        - Soyez très strict sur la correspondance avec le profil utilisateur
+        Si profil = "Produits laitiers, Microbiologique, UE":
+        - Article sur Listeria dans fromages UE → Score 90-95 (PARFAIT)
+        - Article sur STEC dans lait cru France → Score 85-90 (EXCELLENT)
+        - Article sur pesticides dans légumes UE → Score 15-25 (MAUVAIS: type produit)
+        - Article sur Salmonella dans produits laitiers US → Score 35-45 (MOYEN: mauvais marché)
+        - Article réglementation générale UE → Score 40-50 (FAIBLE: trop général)
+        - Article sur feed contamination → Score 0-10 (EXCLUSION)
+
+        Si profil = "Viande, Chimique, France":
+        - Article sur résidus antibiotiques viande France → Score 90-100 (PARFAIT)
+        - Article sur allergènes produits laitiers France → Score 20-30 (MAUVAIS: produit + risque)
+        - Article sur hormones viande UE → Score 65-75 (BON: produit/risque, géo proche)
+        - Article sur Campylobacter volaille France → Score 45-55 (MOYEN: bon produit/géo, mauvais risque)
+
+        Si profil = "Autre" (tous produits):
+        - Soyez moins strict sur les types de produits mais maintenez les autres critères
+
+        ATTENTION MAXIMALE:
+        ❌ Soyez IMPITOYABLE sur la correspondance exacte avec les types de produits
+        ❌ Un article sur "légumes" n'est PAS pertinent pour un profil "produits laitiers"
+        ❌ Un article "alimentation animale" n'est PAS pertinent pour "produits pour humains"
+        ❌ Un article "cosmétiques" n'est JAMAIS pertinent pour food safety
+        ❌ Géographie : USA/Canada uniquement pertinents si mentionnés dans profil
+        ❌ Articles génériques sur "sécurité alimentaire" sans spécification = score faible
+
+        PROCESSUS D'ÉVALUATION OBLIGATOIRE:
+        1. Identifiez le type de produit principal de l'article
+        2. Vérifiez s'il correspond EXACTEMENT à un type du profil
+        3. Identifiez le type de risque de l'article
+        4. Vérifiez la géographie/marché
+        5. Si une des correspondances majeures échoue → Score maximum 45
+        6. Soyez particulièrement strict si le profil ne contient PAS "Autre"
 
         Répondez EXACTEMENT dans ce format:
         Pertinence: [Très pertinent/Modérément pertinent/Peu pertinent/Non pertinent]
         Score: [nombre entre 0 et 100]
-        Résumé: [En 1-2 phrases, expliquez la correspondance ou non-correspondance avec le profil utilisateur]
+        Résumé: [En 2-3 phrases, expliquez la correspondance EXACTE ou les éléments qui ne correspondent PAS au profil. Mentionnez explicitement les types de produits, risques et marchés.]
         """
         
         try:
@@ -254,12 +292,145 @@ class ArticleEvaluator:
                 elif line_stripped.lower().startswith("résumé:"): # French 'Résumé'
                     summary_text = line_stripped[len("Résumé:"):].strip()
                     if summary_text: # Ensure not empty
-                        summary = summary_text[:300]  # Limite la taille
+                        summary = summary_text[:400]  # Limite la taille augmentée
         
         except Exception as e:
             st.warning(f"Erreur lors du parsing de l'évaluation : {e}")
         
         return pertinence_level, summary, score
+
+def apply_additional_filtering(evaluated_articles: List[Dict], user_context: str) -> List[Dict]:
+    """
+    Applique un filtrage supplémentaire basé sur des mots-clés pour s'assurer 
+    que les articles correspondent vraiment aux types de produits du profil.
+    """
+    
+    # Extraction des types de produits du contexte utilisateur
+    context_lower = user_context.lower()
+    
+    # Définition des mots-clés par type de produit (français et anglais)
+    product_keywords = {
+        "produits laitiers": [
+            "lait", "fromage", "yaourt", "yogourt", "beurre", "crème", "lactose", "lactosérum", "whey", "caséine",
+            "dairy", "cheese", "milk", "yogurt", "yoghurt", "butter", "cream", "lactose", "casein"
+        ],
+        "viande": [
+            "viande", "porc", "bœuf", "boeuf", "volaille", "poulet", "porc", "agneau", "veau", "jambon", "saucisse",
+            "meat", "beef", "pork", "chicken", "poultry", "lamb", "veal", "ham", "sausage", "bacon"
+        ],
+        "produits frais": [
+            "légumes", "fruits", "salade", "épinards", "tomates", "pommes", "bananes", "fraises", "herbes",
+            "fresh", "vegetable", "fruit", "produce", "frais", "salad", "spinach", "tomato", "apple", "banana", "strawberry"
+        ],
+        "produits de boulangerie": [
+            "pain", "boulangerie", "pâtisserie", "blé", "farine", "gluten", "céréales", "biscuit", "gâteau",
+            "bakery", "bread", "wheat", "flour", "gluten", "cereal", "cookie", "cake", "pastry"
+        ],
+        "boissons": [
+            "boisson", "jus", "eau", "soda", "thé", "café", "vin", "bière", "alcool",
+            "beverage", "drink", "juice", "water", "soft drink", "tea", "coffee", "wine", "beer", "alcohol"
+        ],
+        "aliments transformés": [
+            "transformé", "préparé", "conserve", "surgelé", "plat préparé", "sauce", "condiment",
+            "processed", "prepared", "manufactured", "canned", "frozen", "ready meal", "sauce", "condiment"
+        ],
+        "autre": []  # Le type "autre" accepte tout
+    }
+    
+    # Mots-clés d'exclusion (alimentation animale, etc.)
+    exclusion_keywords = [
+        "feed", "animal feed", "alimentation animale", "aliment pour animaux", "aliments pour animaux",
+        "pet food", "nourriture pour animaux", "food for animals", "animal nutrition",
+        "cosmetic", "cosmétique", "cosmetics", "cosmétiques",
+        "medical device", "dispositif médical", "pharmaceutical", "pharmaceutique", "drug",
+        "fertilizer", "fertilisant", "pesticide application", "agricultural chemicals"
+    ]
+    
+    # Mots-clés de recherche fondamentale (moins prioritaires)
+    research_keywords = [
+        "in vitro", "in vivo", "laboratory study", "étude de laboratoire", "recherche fondamentale",
+        "basic research", "theoretical", "théorique", "model", "modèle", "simulation"
+    ]
+    
+    # Identifier les types de produits dans le profil utilisateur
+    user_product_types = []
+    for product_type in product_keywords.keys():
+        if product_type in context_lower:
+            user_product_types.append(product_type)
+    
+    # Si "autre" est dans le profil, on est moins restrictif
+    if "autre" in user_product_types:
+        less_restrictive = True
+    else:
+        less_restrictive = False
+    
+    filtered_articles = []
+    
+    for article in evaluated_articles:
+        title_lower = article['Titre'].lower()
+        summary_lower = article['Résumé'].lower()
+        article_text = f"{title_lower} {summary_lower}"
+        
+        # Calcul de pénalités
+        penalty = 0
+        reasons = []
+        
+        # Vérification des mots-clés d'exclusion STRICTE
+        exclusion_found = []
+        for keyword in exclusion_keywords:
+            if keyword in article_text:
+                exclusion_found.append(keyword)
+        
+        if exclusion_found:
+            penalty += 60  # Pénalité très lourde
+            reasons.append(f"Exclusion détectée: {', '.join(exclusion_found[:2])}")
+        
+        # Vérification de la correspondance avec les types de produits
+        if not less_restrictive and user_product_types:
+            product_match_found = False
+            matched_products = []
+            
+            for user_product_type in user_product_types:
+                if user_product_type in product_keywords:
+                    keywords = product_keywords[user_product_type]
+                    for keyword in keywords:
+                        if keyword in article_text:
+                            product_match_found = True
+                            matched_products.append(keyword)
+                            break
+                    if product_match_found:
+                        break
+            
+            # Si aucune correspondance trouvée, pénalité importante
+            if not product_match_found:
+                penalty += 40
+                reasons.append("Aucune correspondance type de produit")
+            elif matched_products:
+                reasons.append(f"Produit détecté: {matched_products[0]}")
+        
+        # Vérification recherche fondamentale
+        research_found = any(keyword in article_text for keyword in research_keywords)
+        if research_found:
+            penalty += 15
+            reasons.append("Recherche fondamentale")
+        
+        # Application des pénalités
+        original_score = article['Score']
+        article['Score'] = max(0, original_score - penalty)
+        
+        # Mise à jour de l'évaluation avec les raisons
+        if reasons:
+            article['Évaluation de la Pertinence'] += f" [FILTRAGE: {'; '.join(reasons)}]"
+        
+        # Log des modifications importantes
+        if penalty > 30:
+            article['Évaluation de la Pertinence'] += f" [SCORE: {original_score}→{article['Score']}]"
+        
+        # Seuil d'exclusion après filtrage
+        if article['Score'] >= 25:  # Seuil minimum après filtrage
+            filtered_articles.append(article)
+    
+    return filtered_articles
 
 @st.cache_data(ttl=1800, show_spinner="Récupération RSS...")
 def fetch_rss_feed(url: str) -> List[Dict]:
@@ -398,7 +569,7 @@ st.set_page_config(
 
 st.title("🔍 Veille Réglementaire - Sécurité Alimentaire")
 st.markdown("*Application optimisée pour consultants et auditeurs food safety*")
-st.markdown("✨ **Nouveau** : Extraction optimisée du contenu RSS (content:encoded pour Health BE)")
+st.markdown("✨ **Nouveau** : Évaluation ultra-stricte de la pertinence + Filtrage avancé par type de produit")
 
 # Sidebar pour la configuration
 with st.sidebar:
@@ -418,6 +589,21 @@ with st.sidebar:
         "Nombre maximum d'articles à évaluer",
         [10, 20, 50, 100],
         index=1
+    )
+    
+    # Options de filtrage strict
+    st.subheader("🎯 Filtrage Strict")
+    
+    enable_strict_filtering = st.checkbox(
+        "Activer le filtrage strict par type de produit",
+        value=True,
+        help="Applique des pénalités automatiques pour les articles non-correspondants"
+    )
+    
+    exclude_research = st.checkbox(
+        "Exclure la recherche fondamentale",
+        value=True,
+        help="Pénalise les articles de recherche pure sans application pratique"
     )
     
     # Options de parsing
@@ -443,14 +629,17 @@ with st.sidebar:
     )
     
     # Information sur l'extraction de contenu
-    with st.expander("ℹ️ Extraction de contenu"):
+    with st.expander("ℹ️ Filtrage & Extraction"):
         st.markdown("""
-        **Ordre de priorité pour le contenu:**
+        **🎯 Filtrage Ultra-Strict:**
+        - Exclusion automatique : alimentation animale, cosmétiques
+        - Correspondance exacte types de produits requis
+        - Pénalités pour recherche fondamentale
+        
+        **📊 Extraction de contenu:**
         1. `content:encoded` (plus détaillé, notamment Health BE)
         2. `summary/description` (fallback standard)
         3. `title` (fallback minimal)
-        
-        **Health BE** : Utilise `content:encoded` avec HTML riche
         
         **🇫🇷 Traduction** : Les articles EFSA/EU (en anglais) peuvent être traduits automatiquement
         """)
@@ -463,7 +652,8 @@ with st.expander("🏢 Profil d'Activité", expanded=True):
         selected_product_types = st.multiselect(
             "Types de Produits",
             PRODUCT_TYPES,
-            default=["Autre"]
+            default=["Autre"],
+            help="⚠️ Sélection très importante pour le filtrage strict!"
         )
         
         selected_risk_types = st.multiselect(
@@ -535,7 +725,7 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True, 
         st.info(f"🇫🇷 **Mode traduction activé** : Les titres et résumés en anglais seront traduits automatiquement")
         st.info("➡️ Vérifiez la sidebar pour les détails de traduction en temps réel")
     
-    st.info(f"🔍 Évaluation de {len(all_articles)} articles...")
+    st.info(f"🔍 Évaluation de {len(all_articles)} articles avec critères ultra-stricts...")
     
     # Évaluation des articles avec traduction optionnelle
     evaluator = ArticleEvaluator(groq_api_key)
@@ -633,15 +823,28 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True, 
     if translate_to_french and translation_debug is not None:
         translation_debug.empty()
     
+    # NOUVEAU: Filtrage supplémentaire basé sur les mots-clés
+    if evaluated_articles and enable_strict_filtering:
+        articles_before_filtering = len(evaluated_articles)
+        st.info("🎯 Application du filtrage strict basé sur les types de produits...")
+        evaluated_articles = apply_additional_filtering(evaluated_articles, user_context)
+        
+        # Re-filtrage basé sur le score minimum après ajustements
+        evaluated_articles = [a for a in evaluated_articles if a['Score'] >= min_pertinence_score]
+        
+        articles_after_filtering = len(evaluated_articles)
+        if articles_before_filtering != articles_after_filtering:
+            st.warning(f"⚠️ Filtrage strict : {articles_before_filtering - articles_after_filtering} articles supplémentaires filtrés")
+    
     # Affichage des résultats
     if evaluated_articles:
         # Tri par score décroissant
         evaluated_articles.sort(key=lambda x: x['Score'], reverse=True)
         
-        st.success(f"✅ {len(evaluated_articles)} articles pertinents trouvés (score ≥ {min_pertinence_score})")
+        st.success(f"✅ {len(evaluated_articles)} articles pertinents trouvés après filtrage strict (score ≥ {min_pertinence_score})")
         
-        # Métriques
-        col1, col2, col3, col4 = st.columns(4)
+        # Métriques améliorées
+        col1, col2, col3, col4, col5 = st.columns(5)
         
         score_stats = [a['Score'] for a in evaluated_articles]
         with col1:
@@ -654,6 +857,9 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True, 
             st.metric("Modérément Pertinents", moderate_pertinent)
         with col4:
             st.metric("Score Max", f"{max(score_stats)}/100")
+        with col5:
+            translated_count = len([a for a in evaluated_articles if a.get('Traduit', False)])
+            st.metric("Traduits", f"{translated_count}/{len(evaluated_articles)}")
         
         # AFFICHAGE SIMPLE - AUCUN data_editor !
         st.subheader("📊 Articles Sélectionnés")
@@ -746,7 +952,7 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True, 
         else:
             st.info("Sélectionnez des articles ci-dessus pour voir les détails")
         
-        # 4. Debug
+        # 4. Debug avancé
         if st.sidebar.checkbox("🔬 Mode Debug - Afficher contenu brut"):
             st.markdown("### 🔬 Comparaison Contenu Nettoyé vs Brut")
             
@@ -768,6 +974,35 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True, 
                     st.markdown("**🔧 Contenu Brut (HTML):**")
                     raw_content = article.get('raw_content', 'Non disponible')
                     st.text_area("", raw_content, height=200, key="raw_content_debug")
+        
+        # 5. Statistiques de filtrage
+        if st.sidebar.checkbox("📊 Statistiques de filtrage"):
+            st.markdown("### 📊 Analyse du Filtrage")
+            
+            # Analyse des évaluations contenant des alertes de filtrage
+            filtered_evaluations = [a for a in evaluated_articles if "[FILTRAGE:" in a['Évaluation de la Pertinence']]
+            
+            if filtered_evaluations:
+                st.info(f"🎯 {len(filtered_evaluations)} articles ont subi un filtrage supplémentaire")
+                
+                # Extraction des raisons de filtrage
+                filter_reasons = {}
+                for article in filtered_evaluations:
+                    eval_text = article['Évaluation de la Pertinence']
+                    if "[FILTRAGE:" in eval_text:
+                        reason_part = eval_text.split("[FILTRAGE:")[1].split("]")[0]
+                        reasons = reason_part.split(";")
+                        for reason in reasons:
+                            reason = reason.strip()
+                            if reason:
+                                filter_reasons[reason] = filter_reasons.get(reason, 0) + 1
+                
+                if filter_reasons:
+                    st.markdown("**Raisons de filtrage :**")
+                    for reason, count in sorted(filter_reasons.items(), key=lambda x: x[1], reverse=True):
+                        st.write(f"- {reason}: {count} articles")
+            else:
+                st.success("✅ Aucun article n'a nécessité de filtrage supplémentaire")
         
         # Téléchargement
         if len(evaluated_articles) > 0:
@@ -861,8 +1096,15 @@ if st.button("🚀 Lancer la Veille", type="primary", use_container_width=True, 
                     st.info("Aucune sélection active")
     
     else:
-        st.warning(f"❌ Aucun article avec un score ≥ {min_pertinence_score} trouvé. Essayez de réduire le seuil de pertinence.")
+        st.warning(f"❌ Aucun article avec un score ≥ {min_pertinence_score} trouvé après filtrage strict. Essayez de :")
+        st.markdown("""
+        - Réduire le seuil de pertinence
+        - Désactiver le filtrage strict
+        - Élargir les types de produits (ajouter "Autre")
+        - Vérifier la correspondance avec votre profil
+        """)
 
-# Footer
+# Footer amélioré
 st.markdown("---")
 st.markdown("*Développé pour les professionnels de la sécurité alimentaire européenne*")
+st.markdown("🎯 **Version 2.0** : Filtrage ultra-strict + Traduction automatique + Export optimisé")
